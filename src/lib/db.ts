@@ -138,14 +138,14 @@ export const pastPaperService = {
       .from('past_papers').select('*').eq('user_id', userId).order('date', { ascending: true });
     if (error) throw error;
     return (data ?? []).map(row => ({
-      id: row.id, subject: row.subject, title: row.title ?? '', date: row.date,
+      id: row.id, subject: row.subject, date: row.date,
       score: row.score, maxScore: row.max_score, percentage: row.percentage,
     }));
   },
   async add(result: PastPaperResult): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('past_papers').insert({
-      id: result.id, user_id: userId, subject: result.subject, title: result.title,
+      id: result.id, user_id: userId, subject: result.subject,
       date: result.date, score: result.score, max_score: result.maxScore, percentage: result.percentage,
     });
     if (error) throw error;

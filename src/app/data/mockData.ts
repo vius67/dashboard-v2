@@ -95,18 +95,18 @@ export const HOMEWORK_DATA: Homework[] = [
 ];
 
 export const PAST_PAPER_RESULTS: PastPaperResult[] = [
-  { id: 'pp1', subject: 'Mathematics', title: '2025 Trial Exam', date: '2026-02-15', score: 85, maxScore: 100, percentage: 85 },
-  { id: 'pp2', subject: 'Physics', title: '2025 Trial Exam', date: '2026-02-18', score: 78, maxScore: 100, percentage: 78 },
-  { id: 'pp3', subject: 'Chemistry', title: '2025 Trial Exam', date: '2026-02-20', score: 92, maxScore: 100, percentage: 92 },
-  { id: 'pp4', subject: 'English Literature', title: '2025 Trial Exam', date: '2026-02-22', score: 88, maxScore: 100, percentage: 88 },
-  { id: 'pp5', subject: 'Computer Science', title: '2025 Trial Exam', date: '2026-02-25', score: 95, maxScore: 100, percentage: 95 },
-  { id: 'pp6', subject: 'Mathematics', title: '2024 HSC Paper', date: '2026-03-01', score: 89, maxScore: 100, percentage: 89 },
-  { id: 'pp7', subject: 'Physics', title: '2024 HSC Paper', date: '2026-03-03', score: 82, maxScore: 100, percentage: 82 },
-  { id: 'pp8', subject: 'Chemistry', title: '2024 HSC Paper', date: '2026-03-05', score: 90, maxScore: 100, percentage: 90 },
-  { id: 'pp9', subject: 'Biology', title: '2024 HSC Paper', date: '2026-03-08', score: 86, maxScore: 100, percentage: 86 },
-  { id: 'pp10', subject: 'History', title: '2024 HSC Paper', date: '2026-03-10', score: 84, maxScore: 100, percentage: 84 },
-  { id: 'pp11', subject: 'Mathematics', title: '2023 HSC Paper', date: '2026-03-12', score: 91, maxScore: 100, percentage: 91 },
-  { id: 'pp12', subject: 'Computer Science', title: '2023 HSC Paper', date: '2026-03-15', score: 97, maxScore: 100, percentage: 97 },
+  { id: 'pp1', subject: 'Mathematics', date: '2026-02-15', score: 85, maxScore: 100, percentage: 85 },
+  { id: 'pp2', subject: 'Physics', date: '2026-02-18', score: 78, maxScore: 100, percentage: 78 },
+  { id: 'pp3', subject: 'Chemistry', date: '2026-02-20', score: 92, maxScore: 100, percentage: 92 },
+  { id: 'pp4', subject: 'English Literature', date: '2026-02-22', score: 88, maxScore: 100, percentage: 88 },
+  { id: 'pp5', subject: 'Computer Science', date: '2026-02-25', score: 95, maxScore: 100, percentage: 95 },
+  { id: 'pp6', subject: 'Mathematics', date: '2026-03-01', score: 89, maxScore: 100, percentage: 89 },
+  { id: 'pp7', subject: 'Physics', date: '2026-03-03', score: 82, maxScore: 100, percentage: 82 },
+  { id: 'pp8', subject: 'Chemistry', date: '2026-03-05', score: 90, maxScore: 100, percentage: 90 },
+  { id: 'pp9', subject: 'Biology', date: '2026-03-08', score: 86, maxScore: 100, percentage: 86 },
+  { id: 'pp10', subject: 'History', date: '2026-03-10', score: 84, maxScore: 100, percentage: 84 },
+  { id: 'pp11', subject: 'Mathematics', date: '2026-03-12', score: 91, maxScore: 100, percentage: 91 },
+  { id: 'pp12', subject: 'Computer Science', date: '2026-03-15', score: 97, maxScore: 100, percentage: 97 },
 ];
 
 export const TODO_DATA: TodoItem[] = [

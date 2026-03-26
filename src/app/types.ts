@@ -22,7 +22,6 @@ export interface Homework {
 export interface PastPaperResult {
   id: string;
   subject: string;
-  title: string;
   date: string;
   score: number;
   maxScore: number;
