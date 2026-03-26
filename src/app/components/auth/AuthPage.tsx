@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../../context/AppContext';
 import { Eye, EyeOff, BookOpen } from 'lucide-react';
 
 type Mode = 'login' | 'signup';

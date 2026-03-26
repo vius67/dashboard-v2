@@ -5,7 +5,7 @@ export interface ClassPeriod {
   room: string;
   startTime: string;
   endTime: string;
-  dayOfWeek: number; // 0-6 (Sunday-Saturday)
+  dayOfWeek: number;
   color: string;
 }
 
@@ -22,6 +22,7 @@ export interface Homework {
 export interface PastPaperResult {
   id: string;
   subject: string;
+  title: string;
   date: string;
   score: number;
   maxScore: number;
@@ -33,4 +34,16 @@ export interface TodoItem {
   text: string;
   completed: boolean;
   createdAt: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  date: string;
+  time?: string;
+  endTime?: string;
+  type: 'exam' | 'assignment' | 'event' | 'reminder';
+  subject?: string;
+  color: string;
+  description?: string;
 }
