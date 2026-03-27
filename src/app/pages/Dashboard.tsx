@@ -20,21 +20,31 @@ function getFormattedDate() {
   return new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
+/**
+ * Parse ICS text into unique ClassPeriod slots (deduplicated by subject+day+startTime).
+ * ICS recurring events produce many identical blocks — we only keep one slot per unique combo.
+ */
 function parseICS(text: string): Omit<ClassPeriod, 'id'>[] {
-  const events: Omit<ClassPeriod, 'id'>[] = [];
-  const blocks = text.split('BEGIN:VEVENT').slice(1);
   const colorMap: Record<string, string> = {};
   const palette = [...COLORS];
 
+  // Collect all VEVENT blocks
+  const blocks = text.split('BEGIN:VEVENT').slice(1);
+
+  // Map keyed by "subject|dayOfWeek|startTime" to deduplicate recurring events
+  const slotMap = new Map<string, Omit<ClassPeriod, 'id'>>();
+
   for (const block of blocks) {
     const get = (key: string) => {
-      const match = block.match(new RegExp(`${key}[^:]*:([^\r\n]+)`));
+      const match = block.match(new RegExp(`${key}[^:\r\n]*:([^\r\n]+)`));
       return match ? match[1].trim() : '';
     };
 
     const summary = get('SUMMARY') || 'Unknown Class';
     const location = get('LOCATION') || '';
     const description = get('DESCRIPTION') || '';
+
+    // Handle both floating and UTC timestamps
     const dtstart = get('DTSTART');
     if (!dtstart) continue;
 
@@ -46,23 +56,53 @@ function parseICS(text: string): Omit<ClassPeriod, 'id'>[] {
 
     const dtend = get('DTEND');
     let endTime = startTime;
-    const endMatch = dtend.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
-    if (endMatch) endTime = `${endMatch[4]}:${endMatch[5]}`;
+    const endMatch = dtend.match(/T(\d{2})(\d{2})/);
+    if (endMatch) endTime = `${endMatch[1]}:${endMatch[2]}`;
 
     const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
     const dayOfWeek = date.getDay();
+    // Skip weekends
     if (dayOfWeek === 0 || dayOfWeek === 6) continue;
 
+    // Assign a stable colour per subject name
     if (!colorMap[summary]) {
       colorMap[summary] = palette[Object.keys(colorMap).length % palette.length];
     }
 
-    const teacherMatch = description.match(/teacher[:\s]+([^\n,]+)/i);
+    // Try to extract teacher from description
+    const teacherMatch = description.match(/(?:teacher|tutor|staff)[:\s]+([^\n,;]+)/i);
     const teacher = teacherMatch ? teacherMatch[1].trim() : '';
 
-    events.push({ subject: summary, teacher, room: location, startTime, endTime, dayOfWeek, color: colorMap[summary] });
+    const key = `${summary}|${dayOfWeek}|${startTime}`;
+    // Only keep first occurrence of each unique slot
+    if (!slotMap.has(key)) {
+      slotMap.set(key, {
+        subject: summary,
+        teacher,
+        room: location,
+        startTime,
+        endTime,
+        dayOfWeek,
+        color: colorMap[summary],
+      });
+    }
   }
-  return events;
+
+  return Array.from(slotMap.values());
+}
+
+/**
+ * Build a stable deterministic ID from subject+day+startTime so re-importing
+ * the same ICS file upserts rather than inserts new rows.
+ */
+function makeStableId(cls: Omit<ClassPeriod, 'id'>): string {
+  const raw = `${cls.subject}|${cls.dayOfWeek}|${cls.startTime}`;
+  // Simple stable hash — good enough for deduplication
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    hash = (Math.imul(31, hash) + raw.charCodeAt(i)) >>> 0;
+  }
+  return `ics-${hash.toString(16)}`;
 }
 
 export default function Dashboard() {
@@ -84,33 +124,69 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    const tick = () => { setCurrentClass(getCurrentClass(timetable)); setNextClass(getNextClass(timetable)); };
-    tick(); const i = setInterval(tick, 10000); return () => clearInterval(i);
+    const tick = () => {
+      setCurrentClass(getCurrentClass(timetable));
+      setNextClass(getNextClass(timetable));
+    };
+    tick();
+    const i = setInterval(tick, 10000);
+    return () => clearInterval(i);
   }, [timetable]);
 
   useEffect(() => {
     if (!nextClass) return;
     const tick = () => setTimeRemaining(getTimeUntil(nextClass.startTime, nextClass.dayOfWeek));
-    tick(); const i = setInterval(tick, 1000); return () => clearInterval(i);
+    tick();
+    const i = setInterval(tick, 1000);
+    return () => clearInterval(i);
   }, [nextClass]);
 
-  const handleAdd = async (p: ClassPeriod) => { await timetableService.upsert(p); setTimetable(prev => [...prev, p]); setShowModal(false); };
-  const handleDelete = async (id: string) => { await timetableService.delete(id); setTimetable(prev => prev.filter(c => c.id !== id)); };
+  const handleAdd = async (p: ClassPeriod) => {
+    await timetableService.upsert(p);
+    // Replace if same id already exists, else append
+    setTimetable(prev => {
+      const exists = prev.find(c => c.id === p.id);
+      return exists ? prev.map(c => c.id === p.id ? p : c) : [...prev, p];
+    });
+    setShowModal(false);
+  };
+
+  const handleDelete = async (id: string) => {
+    await timetableService.delete(id);
+    setTimetable(prev => prev.filter(c => c.id !== id));
+  };
+
+  /**
+   * ICS import: assign stable IDs, upsert each slot, then merge into state
+   * without creating duplicates if the user imports the same file twice.
+   */
   const handleICSImport = async (classes: Omit<ClassPeriod, 'id'>[]) => {
-    const newClasses: ClassPeriod[] = [];
-    for (const cls of classes) {
-      const p: ClassPeriod = { ...cls, id: `ics-${Date.now()}-${Math.random().toString(36).slice(2)}` };
-      await timetableService.upsert(p);
-      newClasses.push(p);
-    }
-    setTimetable(prev => [...prev, ...newClasses]);
+    const incoming: ClassPeriod[] = classes.map(cls => ({
+      ...cls,
+      id: makeStableId(cls),
+    }));
+
+    // Upsert all in parallel
+    await Promise.all(incoming.map(p => timetableService.upsert(p)));
+
+    // Merge into current state: update existing, append new
+    setTimetable(prev => {
+      const map = new Map(prev.map(c => [c.id, c]));
+      for (const p of incoming) map.set(p.id, p);
+      return Array.from(map.values());
+    });
+
     setShowICSModal(false);
   };
 
   const todaysClasses = getTodaysClasses(timetable);
 
-  const glass = darkMode ? 'backdrop-blur-xl bg-white/5 border border-white/10' : 'backdrop-blur-xl bg-white/60 border border-white/70';
-  const cardBg = darkMode ? 'bg-white/5 border border-white/10' : 'bg-white/70 border border-white/80';
+  const glass = darkMode
+    ? 'backdrop-blur-xl bg-white/5 border border-white/10'
+    : 'backdrop-blur-xl bg-white/60 border border-white/70';
+  const cardBg = darkMode
+    ? 'bg-white/5 border border-white/10'
+    : 'bg-white/70 border border-white/80';
 
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} className="w-full">
@@ -220,7 +296,8 @@ export default function Dashboard() {
         )}
 
         {todaysClasses.length > 0 && (
-          <motion.button onClick={() => scheduleRef.current?.scrollIntoView({ behavior:'smooth', block:'start' })}
+          <motion.button
+            onClick={() => scheduleRef.current?.scrollIntoView({ behavior:'smooth', block:'start' })}
             initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ delay:0.8 }}
             className={`absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 text-xs uppercase tracking-widest transition-colors
               ${darkMode?'text-white/30 hover:text-white/60':'text-gray-400 hover:text-gray-600'}`}>
@@ -238,10 +315,10 @@ export default function Dashboard() {
           <motion.div initial={{ opacity:0, y:30 }} whileInView={{ opacity:1, y:0 }} viewport={{ once:true, margin:'-80px' }} transition={{ duration:0.5 }}>
             <h2 className={`text-2xl font-light mb-8 ${darkMode?'text-white':'text-gray-900'}`}>Today's Schedule</h2>
             <div className="space-y-0">
-              {todaysClasses.map((cls,i) => (
+              {todaysClasses.map((cls, i) => (
                 <ScheduleRow key={cls.id} classData={cls} index={i} total={todaysClasses.length}
                   onDelete={handleDelete} darkMode={darkMode} cardBg={cardBg}
-                  isNow={currentClass?.id===cls.id} isPast={isPastClass(cls)}/>
+                  isNow={currentClass?.id === cls.id} isPast={isPastClass(cls)}/>
               ))}
             </div>
           </motion.div>
@@ -255,11 +332,12 @@ export default function Dashboard() {
             <h2 className={`text-2xl font-light mb-8 ${darkMode?'text-white':'text-gray-900'}`}>Full Timetable</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
               {[1,2,3,4,5].map(day => {
-                const dc = timetable.filter(c=>c.dayOfWeek===day).sort((a,b)=>a.startTime.localeCompare(b.startTime));
+                const dc = timetable.filter(c => c.dayOfWeek === day).sort((a,b) => a.startTime.localeCompare(b.startTime));
                 if (!dc.length) return null;
-                const isToday = new Date().getDay()===day;
+                const isToday = new Date().getDay() === day;
                 return (
-                  <motion.div key={day} initial={{ opacity:0, y:20 }} whileInView={{ opacity:1, y:0 }} viewport={{ once:true }} transition={{ delay:(day-1)*0.05 }}
+                  <motion.div key={day} initial={{ opacity:0, y:20 }} whileInView={{ opacity:1, y:0 }}
+                    viewport={{ once:true }} transition={{ delay:(day-1)*0.05 }}
                     className={`rounded-2xl p-4 ${cardBg} ${isToday?'ring-2 ring-emerald-500/40':''}`}>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className={`text-sm font-semibold ${darkMode?'text-white':'text-gray-900'}`}>{DAYS[day]}</h3>
@@ -273,7 +351,7 @@ export default function Dashboard() {
                             <div className={`text-xs font-medium truncate ${darkMode?'text-white':'text-gray-900'}`}>{cls.subject}</div>
                             <div className={`text-xs ${darkMode?'text-white/40':'text-gray-400'}`}>{cls.startTime} · {cls.room}</div>
                           </div>
-                          <motion.button onClick={()=>handleDelete(cls.id)} whileHover={{ scale:1.1 }} whileTap={{ scale:0.9 }}
+                          <motion.button onClick={() => handleDelete(cls.id)} whileHover={{ scale:1.1 }} whileTap={{ scale:0.9 }}
                             className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-500 transition-opacity flex-shrink-0">
                             <Trash2 className="w-3.5 h-3.5"/>
                           </motion.button>
@@ -289,14 +367,14 @@ export default function Dashboard() {
       )}
 
       {error && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm backdrop-blur-xl">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm backdrop-blur-xl z-50">
           {error}
         </div>
       )}
 
       <AnimatePresence>
-        {showModal && <AddClassModal onClose={()=>setShowModal(false)} onAdd={handleAdd} darkMode={darkMode}/>}
-        {showICSModal && <ICSImportModal onClose={()=>setShowICSModal(false)} onImport={handleICSImport} darkMode={darkMode}/>}
+        {showModal && <AddClassModal onClose={() => setShowModal(false)} onAdd={handleAdd} darkMode={darkMode}/>}
+        {showICSModal && <ICSImportModal onClose={() => setShowICSModal(false)} onImport={handleICSImport} darkMode={darkMode}/>}
       </AnimatePresence>
     </motion.div>
   );
@@ -322,13 +400,13 @@ function TimeUnit({ value, label, darkMode }: { value:number; label:string; dark
 }
 
 function ScheduleRow({ classData, index, total, onDelete, darkMode, cardBg, isNow, isPast }: {
-  classData:ClassPeriod; index:number; total:number; onDelete:(id:string)=>void;
-  darkMode:boolean; cardBg:string; isNow:boolean; isPast:boolean;
+  classData: ClassPeriod; index: number; total: number; onDelete: (id:string) => void;
+  darkMode: boolean; cardBg: string; isNow: boolean; isPast: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   return (
     <motion.div initial={{ opacity:0, x:-20 }} whileInView={{ opacity:1, x:0 }} viewport={{ once:true }} transition={{ delay:index*0.06 }}
-      onHoverStart={()=>setHovered(true)} onHoverEnd={()=>setHovered(false)} className="flex gap-4 items-stretch pb-2">
+      onHoverStart={() => setHovered(true)} onHoverEnd={() => setHovered(false)} className="flex gap-4 items-stretch pb-2">
       <div className="flex-shrink-0 w-16 text-right pt-4">
         <div className={`text-sm font-medium ${isPast?(darkMode?'text-white/30':'text-gray-300'):(darkMode?'text-white/80':'text-gray-700')}`}>{classData.startTime}</div>
         <div className={`text-xs ${darkMode?'text-white/20':'text-gray-400'}`}>{classData.endTime}</div>
@@ -360,7 +438,7 @@ function ScheduleRow({ classData, index, total, onDelete, darkMode, cardBg, isNo
           <AnimatePresence>
             {hovered && (
               <motion.button initial={{ opacity:0, scale:0.8 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.8 }}
-                onClick={()=>onDelete(classData.id)} className="text-red-400 hover:text-red-500 ml-3 flex-shrink-0"
+                onClick={() => onDelete(classData.id)} className="text-red-400 hover:text-red-500 ml-3 flex-shrink-0"
                 whileHover={{ scale:1.1 }} whileTap={{ scale:0.9 }}>
                 <Trash2 className="w-4 h-4"/>
               </motion.button>
@@ -373,7 +451,9 @@ function ScheduleRow({ classData, index, total, onDelete, darkMode, cardBg, isNo
 }
 
 function ICSImportModal({ onClose, onImport, darkMode }: {
-  onClose:()=>void; onImport:(classes:Omit<ClassPeriod,'id'>[])=>Promise<void>; darkMode:boolean;
+  onClose: () => void;
+  onImport: (classes: Omit<ClassPeriod,'id'>[]) => Promise<void>;
+  darkMode: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const [parsed, setParsed] = useState<Omit<ClassPeriod,'id'>[]>([]);
@@ -388,25 +468,36 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
     reader.onload = (e) => {
       const text = e.target?.result as string;
       const classes = parseICS(text);
-      if (!classes.length) { setError('No weekday classes found. Make sure the file contains VEVENT entries with date/time info.'); return; }
+      if (!classes.length) {
+        setError('No weekday classes found. Make sure the file contains VEVENT entries with date/time info.');
+        return;
+      }
       setParsed(classes);
     };
     reader.readAsText(file);
   };
 
-  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragging(false); const f=e.dataTransfer.files[0]; if(f) processFile(f); };
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => { const f=e.target.files?.[0]; if(f) processFile(f); };
-  const handleImport = async () => { setLoading(true); try { await onImport(parsed); } catch(e:any) { setError(e.message); } finally { setLoading(false); } };
+  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) processFile(f); };
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (f) processFile(f); };
+  const handleImport = async () => {
+    setLoading(true);
+    try { await onImport(parsed); }
+    catch(e: any) { setError(e.message); }
+    finally { setLoading(false); }
+  };
 
   const modalBg = darkMode ? 'bg-gray-900 border border-white/10' : 'bg-white border border-gray-100';
   const dropBg = dragging
-    ? (darkMode?'bg-emerald-500/20 border-emerald-500':'bg-emerald-50 border-emerald-500')
-    : (darkMode?'bg-white/5 border-white/10 hover:bg-white/10':'bg-gray-50 border-gray-200 hover:bg-gray-100');
+    ? (darkMode ? 'bg-emerald-500/20 border-emerald-500' : 'bg-emerald-50 border-emerald-500')
+    : (darkMode ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-gray-50 border-gray-200 hover:bg-gray-100');
+
+  // Count unique subjects for the preview
+  const uniqueSubjects = [...new Set(parsed.map(c => c.subject))].length;
 
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <motion.div initial={{ opacity:0, scale:0.95, y:20 }} animate={{ opacity:1, scale:1, y:0 }}
         exit={{ opacity:0, scale:0.95, y:20 }} transition={{ type:'spring', stiffness:300, damping:28 }}
         className={`w-full max-w-lg rounded-3xl p-8 shadow-2xl ${modalBg}`}>
@@ -422,8 +513,8 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
 
         {!parsed.length ? (
           <>
-            <div onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)}
-              onDrop={handleDrop} onClick={()=>fileRef.current?.click()}
+            <div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+              onDrop={handleDrop} onClick={() => fileRef.current?.click()}
               className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${dropBg}`}>
               <input ref={fileRef} type="file" accept=".ics" onChange={handleFileInput} className="hidden"/>
               <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode?'text-white/30':'text-gray-300'}`}/>
@@ -438,28 +529,28 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
           <>
             <div className={`rounded-2xl p-4 mb-4 ${darkMode?'bg-white/5':'bg-gray-50'}`}>
               <p className={`text-sm font-medium mb-3 ${darkMode?'text-white/60':'text-gray-500'}`}>
-                Found {parsed.length} classes across {[...new Set(parsed.map(c=>c.dayOfWeek))].length} days
+                Found {parsed.length} unique class slots across {uniqueSubjects} subject{uniqueSubjects !== 1 ? 's' : ''} —
+                re-importing this file won't create duplicates.
               </p>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {parsed.slice(0,10).map((cls,i)=>(
+                {parsed.map((cls, i) => (
                   <div key={i} className="flex items-center gap-2.5">
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor:cls.color }}/>
                     <span className={`text-sm flex-1 truncate ${darkMode?'text-white':'text-gray-800'}`}>{cls.subject}</span>
                     <span className={`text-xs ${darkMode?'text-white/30':'text-gray-400'}`}>{DAYS[cls.dayOfWeek]} {cls.startTime}</span>
                   </div>
                 ))}
-                {parsed.length>10 && <p className={`text-xs ${darkMode?'text-white/30':'text-gray-400'}`}>+{parsed.length-10} more…</p>}
               </div>
             </div>
             <div className="flex gap-3">
-              <button onClick={()=>setParsed([])}
+              <button onClick={() => setParsed([])}
                 className={`flex-1 py-3 rounded-xl font-medium text-sm transition ${darkMode?'bg-white/5 hover:bg-white/10 text-white/70':'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}>
                 Choose different file
               </button>
               <motion.button onClick={handleImport} disabled={loading} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
                 className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm disabled:opacity-50 transition flex items-center justify-center gap-2">
                 {loading && <Loader2 className="w-4 h-4 animate-spin"/>}
-                {loading?'Importing…':`Import ${parsed.length} classes`}
+                {loading ? 'Importing…' : `Import ${parsed.length} classes`}
               </motion.button>
             </div>
           </>
@@ -472,25 +563,35 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
 }
 
 function AddClassModal({ onClose, onAdd, darkMode }: {
-  onClose:()=>void; onAdd:(p:ClassPeriod)=>Promise<void>; darkMode:boolean;
+  onClose: () => void; onAdd: (p: ClassPeriod) => Promise<void>; darkMode: boolean;
 }) {
-  const [subject,setSubject]=useState('');const [teacher,setTeacher]=useState('');const [room,setRoom]=useState('');
-  const [day,setDay]=useState(1);const [start,setStart]=useState('09:00');const [end,setEnd]=useState('10:00');
-  const [color,setColor]=useState(COLORS[0]);const [loading,setLoading]=useState(false);const [error,setError]=useState('');
+  const [subject, setSubject] = useState('');
+  const [teacher, setTeacher] = useState('');
+  const [room, setRoom] = useState('');
+  const [day, setDay] = useState(1);
+  const [start, setStart] = useState('09:00');
+  const [end, setEnd] = useState('10:00');
+  const [color, setColor] = useState(COLORS[0]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const inputCls=`w-full px-4 py-3 rounded-xl text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500
-    ${darkMode?'bg-white/5 border border-white/10 text-white placeholder-white/30':'bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400'}`;
+  const inputCls = `w-full px-4 py-3 rounded-xl text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500
+    ${darkMode ? 'bg-white/5 border border-white/10 text-white placeholder-white/30' : 'bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400'}`;
 
-  const submit=async(e:React.FormEvent)=>{
-    e.preventDefault();setError('');
-    try{setLoading(true);await onAdd({id:`cls-${Date.now()}`,subject:subject.trim(),teacher:teacher.trim(),room:room.trim(),dayOfWeek:day,startTime:start,endTime:end,color});}
-    catch(err:any){setError(err.message);}finally{setLoading(false);}
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    // For manually added classes, use a stable ID based on subject+day+time too
+    const stableId = makeStableId({ subject: subject.trim(), teacher: teacher.trim(), room: room.trim(), dayOfWeek: day, startTime: start, endTime: end, color });
+    try {
+      setLoading(true);
+      await onAdd({ id: stableId, subject: subject.trim(), teacher: teacher.trim(), room: room.trim(), dayOfWeek: day, startTime: start, endTime: end, color });
+    } catch(err: any) { setError(err.message); } finally { setLoading(false); }
   };
 
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <motion.div initial={{ opacity:0, scale:0.95, y:20 }} animate={{ opacity:1, scale:1, y:0 }}
         exit={{ opacity:0, scale:0.95, y:20 }} transition={{ type:'spring', stiffness:300, damping:28 }}
         className={`w-full max-w-md rounded-3xl p-8 max-h-[90vh] overflow-y-auto shadow-2xl ${darkMode?'bg-gray-900 border border-white/10':'bg-white border border-gray-100'}`}>
@@ -499,31 +600,31 @@ function AddClassModal({ onClose, onAdd, darkMode }: {
           <button onClick={onClose} className={`${darkMode?'text-white/30 hover:text-white/70':'text-gray-400 hover:text-gray-700'} transition-colors`}><X className="w-5 h-5"/></button>
         </div>
         <form onSubmit={submit} className="space-y-4">
-          {([['Subject',subject,setSubject,'e.g. Mathematics'],['Teacher',teacher,setTeacher,'e.g. Mr Smith'],['Room',room,setRoom,'e.g. Room 204']] as [string,string,(v:string)=>void,string][]).map(([label,val,setter,ph])=>(
+          {([['Subject',subject,setSubject,'e.g. Mathematics'],['Teacher',teacher,setTeacher,'e.g. Mr Smith'],['Room',room,setRoom,'e.g. Room 204']] as [string,string,(v:string)=>void,string][]).map(([label,val,setter,ph]) => (
             <div key={label}>
               <label className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${darkMode?'text-white/40':'text-gray-400'}`}>{label}</label>
-              <input required value={val} onChange={e=>setter(e.target.value)} placeholder={ph} className={inputCls}/>
+              <input required value={val} onChange={e => setter(e.target.value)} placeholder={ph} className={inputCls}/>
             </div>
           ))}
           <div>
             <label className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${darkMode?'text-white/40':'text-gray-400'}`}>Day</label>
-            <select value={day} onChange={e=>setDay(+e.target.value)} className={inputCls}>
-              {[1,2,3,4,5].map(d=><option key={d} value={d}>{DAYS[d]}</option>)}
+            <select value={day} onChange={e => setDay(+e.target.value)} className={inputCls}>
+              {[1,2,3,4,5].map(d => <option key={d} value={d}>{DAYS[d]}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            {([['Start',start,setStart],['End',end,setEnd]] as [string,string,(v:string)=>void][]).map(([label,val,setter])=>(
+            {([['Start',start,setStart],['End',end,setEnd]] as [string,string,(v:string)=>void][]).map(([label,val,setter]) => (
               <div key={label}>
                 <label className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${darkMode?'text-white/40':'text-gray-400'}`}>{label}</label>
-                <input required type="time" value={val} onChange={e=>setter(e.target.value)} className={inputCls}/>
+                <input required type="time" value={val} onChange={e => setter(e.target.value)} className={inputCls}/>
               </div>
             ))}
           </div>
           <div>
             <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${darkMode?'text-white/40':'text-gray-400'}`}>Colour</label>
             <div className="flex gap-2 flex-wrap">
-              {COLORS.map(c=>(
-                <button key={c} type="button" onClick={()=>setColor(c)}
+              {COLORS.map(c => (
+                <button key={c} type="button" onClick={() => setColor(c)}
                   className={`w-8 h-8 rounded-full transition-all ${color===c?'ring-2 ring-offset-2 scale-110':'hover:scale-110 opacity-70 hover:opacity-100'}`}
                   style={{ backgroundColor:c }}/>
               ))}
@@ -538,7 +639,7 @@ function AddClassModal({ onClose, onAdd, darkMode }: {
             <motion.button type="submit" disabled={loading} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
               className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm disabled:opacity-50 transition flex items-center justify-center gap-2">
               {loading && <Loader2 className="w-4 h-4 animate-spin"/>}
-              {loading?'Saving…':'Add Class'}
+              {loading ? 'Saving…' : 'Add Class'}
             </motion.button>
           </div>
         </form>
