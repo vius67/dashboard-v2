@@ -20,11 +20,15 @@ function getFormattedDate() {
   return new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
+// FIXED: Added de-duplication logic inside the parser
 function parseICS(text: string): Omit<ClassPeriod, 'id'>[] {
   const events: Omit<ClassPeriod, 'id'>[] = [];
   const blocks = text.split('BEGIN:VEVENT').slice(1);
   const colorMap: Record<string, string> = {};
   const palette = [...COLORS];
+  
+  // Track unique classes to prevent recurring event spam
+  const seenFingerprints = new Set<string>();
 
   for (const block of blocks) {
     const get = (key: string) => {
@@ -51,7 +55,14 @@ function parseICS(text: string): Omit<ClassPeriod, 'id'>[] {
 
     const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
     const dayOfWeek = date.getDay();
+    
+    // Skip weekends
     if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+
+    // CREATE FINGERPRINT: Prevents 40 "English" entries for 40 weeks of the year
+    const fingerprint = `${summary}-${dayOfWeek}-${startTime}`;
+    if (seenFingerprints.has(fingerprint)) continue;
+    seenFingerprints.add(fingerprint);
 
     if (!colorMap[summary]) {
       colorMap[summary] = palette[Object.keys(colorMap).length % palette.length];
@@ -78,9 +89,15 @@ export default function Dashboard() {
   const scheduleRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { load(); }, []);
+  
   const load = async () => {
-    try { setLoading(true); setTimetable(await timetableService.getAll()); }
-    catch(e: any) { setError(e.message); } finally { setLoading(false); }
+    try { 
+        setLoading(true); 
+        const data = await timetableService.getAll();
+        setTimetable(data); 
+    }
+    catch(e: any) { setError(e.message); } 
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
@@ -94,21 +111,39 @@ export default function Dashboard() {
     tick(); const i = setInterval(tick, 1000); return () => clearInterval(i);
   }, [nextClass]);
 
-  const handleAdd = async (p: ClassPeriod) => { await timetableService.upsert(p); setTimetable(prev => [...prev, p]); setShowModal(false); };
-  const handleDelete = async (id: string) => { await timetableService.delete(id); setTimetable(prev => prev.filter(c => c.id !== id)); };
+  const handleAdd = async (p: ClassPeriod) => { 
+    await timetableService.upsert(p); 
+    await load(); // Reload to keep state in sync with Supabase
+    setShowModal(false); 
+  };
+
+  const handleDelete = async (id: string) => { 
+    await timetableService.delete(id); 
+    setTimetable(prev => prev.filter(c => c.id !== id)); 
+  };
+
+  // FIXED: Optimized for Supabase (Bulk Insert)
   const handleICSImport = async (classes: Omit<ClassPeriod, 'id'>[]) => {
-    const newClasses: ClassPeriod[] = [];
-    for (const cls of classes) {
-      const p: ClassPeriod = { ...cls, id: `ics-${Date.now()}-${Math.random().toString(36).slice(2)}` };
-      await timetableService.upsert(p);
-      newClasses.push(p);
+    try {
+      setLoading(true);
+      const newClasses: ClassPeriod[] = classes.map(cls => ({
+        ...cls,
+        id: crypto.randomUUID() // Much safer than Date.now() for loops
+      }));
+
+      // Use a single network request for all classes
+      await timetableService.upsertBatch(newClasses); 
+      
+      await load(); // Clean refresh from DB
+      setShowICSModal(false);
+    } catch (e: any) {
+      setError("Import failed: " + e.message);
+    } finally {
+      setLoading(false);
     }
-    setTimetable(prev => [...prev, ...newClasses]);
-    setShowICSModal(false);
   };
 
   const todaysClasses = getTodaysClasses(timetable);
-
   const glass = darkMode ? 'backdrop-blur-xl bg-white/5 border border-white/10' : 'backdrop-blur-xl bg-white/60 border border-white/70';
   const cardBg = darkMode ? 'bg-white/5 border border-white/10' : 'bg-white/70 border border-white/80';
 
@@ -388,7 +423,7 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
     reader.onload = (e) => {
       const text = e.target?.result as string;
       const classes = parseICS(text);
-      if (!classes.length) { setError('No weekday classes found. Make sure the file contains VEVENT entries with date/time info.'); return; }
+      if (!classes.length) { setError('No weekday classes found. Ensure file contains VEVENT entries.'); return; }
       setParsed(classes);
     };
     reader.readAsText(file);
@@ -431,14 +466,14 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
               <p className={`text-sm mt-1 ${darkMode?'text-white/30':'text-gray-400'}`}>or click to browse</p>
             </div>
             <div className={`mt-4 p-4 rounded-xl text-sm ${darkMode?'bg-white/5 text-white/40':'bg-gray-50 text-gray-400'}`}>
-              💡 Export from Google Calendar: Settings → your calendar → Export. From school portals: look for "Export" or "Subscribe" and download the .ics file.
+              💡 Tip: This will ignore duplicate weekly classes and only import your unique subject schedule.
             </div>
           </>
         ) : (
           <>
             <div className={`rounded-2xl p-4 mb-4 ${darkMode?'bg-white/5':'bg-gray-50'}`}>
               <p className={`text-sm font-medium mb-3 ${darkMode?'text-white/60':'text-gray-500'}`}>
-                Found {parsed.length} classes across {[...new Set(parsed.map(c=>c.dayOfWeek))].length} days
+                Found {parsed.length} unique classes
               </p>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {parsed.slice(0,10).map((cls,i)=>(
@@ -459,7 +494,7 @@ function ICSImportModal({ onClose, onImport, darkMode }: {
               <motion.button onClick={handleImport} disabled={loading} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
                 className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm disabled:opacity-50 transition flex items-center justify-center gap-2">
                 {loading && <Loader2 className="w-4 h-4 animate-spin"/>}
-                {loading?'Importing…':`Import ${parsed.length} classes`}
+                {loading?'Importing…':`Import ${parsed.length} unique classes`}
               </motion.button>
             </div>
           </>
@@ -483,7 +518,7 @@ function AddClassModal({ onClose, onAdd, darkMode }: {
 
   const submit=async(e:React.FormEvent)=>{
     e.preventDefault();setError('');
-    try{setLoading(true);await onAdd({id:`cls-${Date.now()}`,subject:subject.trim(),teacher:teacher.trim(),room:room.trim(),dayOfWeek:day,startTime:start,endTime:end,color});}
+    try{setLoading(true);await onAdd({id:crypto.randomUUID(),subject:subject.trim(),teacher:teacher.trim(),room:room.trim(),dayOfWeek:day,startTime:start,endTime:end,color});}
     catch(err:any){setError(err.message);}finally{setLoading(false);}
   };
 
@@ -525,22 +560,15 @@ function AddClassModal({ onClose, onAdd, darkMode }: {
               {COLORS.map(c=>(
                 <button key={c} type="button" onClick={()=>setColor(c)}
                   className={`w-8 h-8 rounded-full transition-all ${color===c?'ring-2 ring-offset-2 scale-110':'hover:scale-110 opacity-70 hover:opacity-100'}`}
-                  style={{ backgroundColor:c }}/>
+                  style={{ backgroundColor: c }} />
               ))}
             </div>
           </div>
-          {error && <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm">{error}</div>}
-          <div className="flex gap-3 pt-1">
-            <button type="button" onClick={onClose}
-              className={`flex-1 py-3 rounded-xl font-medium text-sm transition ${darkMode?'bg-white/5 hover:bg-white/10 text-white/70':'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}>
-              Cancel
-            </button>
-            <motion.button type="submit" disabled={loading} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
-              className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm disabled:opacity-50 transition flex items-center justify-center gap-2">
-              {loading && <Loader2 className="w-4 h-4 animate-spin"/>}
-              {loading?'Saving…':'Add Class'}
-            </motion.button>
-          </div>
+          <motion.button disabled={loading} whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
+            className="w-full py-4 mt-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition flex items-center justify-center gap-2">
+            {loading && <Loader2 className="w-5 h-5 animate-spin"/>}
+            {loading ? 'Adding...' : 'Add Class'}
+          </motion.button>
         </form>
       </motion.div>
     </motion.div>
