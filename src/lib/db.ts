@@ -13,6 +13,7 @@ async function getUserId(): Promise<string> {
   return session.user.id;
 }
 
+// ─── Timetable ───────────────────────────────────────────────────
 export const timetableService = {
   async getAll(): Promise<ClassPeriod[]> {
     const userId = await getUserId();
@@ -25,6 +26,7 @@ export const timetableService = {
       startTime: r.start_time, endTime: r.end_time, dayOfWeek: r.day_of_week, color: r.color,
     }));
   },
+
   async upsert(p: ClassPeriod): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('timetable').upsert({
@@ -34,6 +36,35 @@ export const timetableService = {
     });
     if (error) throw error;
   },
+
+  async replaceAll(periods: ClassPeriod[]): Promise<void> {
+    const userId = await getUserId();
+
+    // Wipe all existing classes for this user first
+    const { error: delError } = await supabase
+      .from('timetable')
+      .delete()
+      .eq('user_id', userId);
+    if (delError) throw delError;
+
+    // Insert the new batch (skip if empty)
+    if (!periods.length) return;
+    const { error: insError } = await supabase
+      .from('timetable')
+      .insert(periods.map(p => ({
+        id: p.id,
+        user_id: userId,
+        subject: p.subject,
+        teacher: p.teacher,
+        room: p.room,
+        start_time: p.startTime,
+        end_time: p.endTime,
+        day_of_week: p.dayOfWeek,
+        color: p.color,
+      })));
+    if (insError) throw insError;
+  },
+
   async delete(id: string): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('timetable').delete().eq('id', id).eq('user_id', userId);
@@ -41,6 +72,7 @@ export const timetableService = {
   },
 };
 
+// ─── Homework ────────────────────────────────────────────────────
 export const homeworkService = {
   async getAll(): Promise<Homework[]> {
     const userId = await getUserId();
@@ -52,6 +84,7 @@ export const homeworkService = {
       dueDate: r.due_date, status: r.status as Homework['status'], color: r.color,
     }));
   },
+
   async upsert(hw: Homework): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('homework').upsert({
@@ -60,11 +93,13 @@ export const homeworkService = {
     });
     if (error) throw error;
   },
+
   async updateStatus(id: string, status: Homework['status']): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('homework').update({ status }).eq('id', id).eq('user_id', userId);
     if (error) throw error;
   },
+
   async delete(id: string): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('homework').delete().eq('id', id).eq('user_id', userId);
@@ -72,6 +107,7 @@ export const homeworkService = {
   },
 };
 
+// ─── Todos ───────────────────────────────────────────────────────
 export const todoService = {
   async getAll(): Promise<TodoItem[]> {
     const userId = await getUserId();
@@ -82,6 +118,7 @@ export const todoService = {
       id: r.id, text: r.text, completed: r.completed, createdAt: r.created_at,
     }));
   },
+
   async add(t: TodoItem): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('todos').insert({
@@ -90,11 +127,13 @@ export const todoService = {
     });
     if (error) throw error;
   },
+
   async toggle(id: string, completed: boolean): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('todos').update({ completed }).eq('id', id).eq('user_id', userId);
     if (error) throw error;
   },
+
   async delete(id: string): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('todos').delete().eq('id', id).eq('user_id', userId);
@@ -102,6 +141,7 @@ export const todoService = {
   },
 };
 
+// ─── Past Papers ─────────────────────────────────────────────────
 export const pastPaperService = {
   async getAll(): Promise<PastPaperResult[]> {
     const userId = await getUserId();
@@ -113,6 +153,7 @@ export const pastPaperService = {
       date: r.date, score: r.score, maxScore: r.max_score, percentage: r.percentage,
     }));
   },
+
   async add(r: PastPaperResult): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('past_papers').insert({
@@ -121,6 +162,7 @@ export const pastPaperService = {
     });
     if (error) throw error;
   },
+
   async delete(id: string): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('past_papers').delete().eq('id', id).eq('user_id', userId);
@@ -128,6 +170,7 @@ export const pastPaperService = {
   },
 };
 
+// ─── Calendar Events ─────────────────────────────────────────────
 export const calendarService = {
   async getAll(): Promise<CalendarEvent[]> {
     const userId = await getUserId();
@@ -142,6 +185,7 @@ export const calendarService = {
       description: r.description ?? undefined,
     }));
   },
+
   async add(e: CalendarEvent): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('calendar_events').insert({
@@ -151,6 +195,7 @@ export const calendarService = {
     });
     if (error) throw error;
   },
+
   async delete(id: string): Promise<void> {
     const userId = await getUserId();
     const { error } = await supabase.from('calendar_events').delete().eq('id', id).eq('user_id', userId);
