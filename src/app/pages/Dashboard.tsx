@@ -1,649 +1,597 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Clock, MapPin, User, Calendar, Plus, X, Trash2, Loader2, ChevronDown, Upload } from 'lucide-react';
+import { Clock, MapPin, User, Calendar, Plus, X, Trash2, Loader2, Upload, Pencil } from 'lucide-react';
 import { timetableService } from '../../lib/db';
 import { getNextClass, getCurrentClass, getTodaysClasses, getTimeUntil, getDayName } from '../utils/timeUtils';
 import { ClassPeriod } from '../types';
 import { useApp } from '../context/AppContext';
 
-const COLORS = ['#8B5CF6','#3B82F6','#10B981','#F59E0B','#EF4444','#EC4899','#06B6D4','#84CC16'];
+const COLORS = ['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1'];
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const DAYS_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
-function getGreeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 18) return 'Good afternoon';
-  return 'Good evening';
-}
+function genId() { return `c-${Date.now()}-${Math.random().toString(36).slice(2,6)}`; }
+function parseTime(t: string) { const [h,m]=t.split(':').map(Number); return h*60+m; }
 
-function getFormattedDate() {
-  return new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
-}
-
-/**
- * Parse ICS text into unique ClassPeriod slots (deduplicated by subject+day+startTime).
- * ICS recurring events produce many identical blocks — we only keep one slot per unique combo.
- */
-function parseICS(text: string): Omit<ClassPeriod, 'id'>[] {
-  const colorMap: Record<string, string> = {};
-  const palette = [...COLORS];
-
-  // Collect all VEVENT blocks
-  const blocks = text.split('BEGIN:VEVENT').slice(1);
-
-  // Map keyed by "subject|dayOfWeek|startTime" to deduplicate recurring events
-  const slotMap = new Map<string, Omit<ClassPeriod, 'id'>>();
-
-  for (const block of blocks) {
-    const get = (key: string) => {
-      const match = block.match(new RegExp(`${key}[^:\r\n]*:([^\r\n]+)`));
-      return match ? match[1].trim() : '';
-    };
-
-    const summary = get('SUMMARY') || 'Unknown Class';
-    const location = get('LOCATION') || '';
-    const description = get('DESCRIPTION') || '';
-
-    // Handle both floating and UTC timestamps
-    const dtstart = get('DTSTART');
-    if (!dtstart) continue;
-
-    const dateMatch = dtstart.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
-    if (!dateMatch) continue;
-
-    const [, year, month, day, hh, mm] = dateMatch;
-    const startTime = `${hh}:${mm}`;
-
-    const dtend = get('DTEND');
-    let endTime = startTime;
-    const endMatch = dtend.match(/T(\d{2})(\d{2})/);
-    if (endMatch) endTime = `${endMatch[1]}:${endMatch[2]}`;
-
-    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    const dayOfWeek = date.getDay();
-    // Skip weekends
-    if (dayOfWeek === 0 || dayOfWeek === 6) continue;
-
-    // Assign a stable colour per subject name
-    if (!colorMap[summary]) {
-      colorMap[summary] = palette[Object.keys(colorMap).length % palette.length];
-    }
-
-    // Try to extract teacher from description
-    const teacherMatch = description.match(/(?:teacher|tutor|staff)[:\s]+([^\n,;]+)/i);
-    const teacher = teacherMatch ? teacherMatch[1].trim() : '';
-
-    const key = `${summary}|${dayOfWeek}|${startTime}`;
-    // Only keep first occurrence of each unique slot
-    if (!slotMap.has(key)) {
-      slotMap.set(key, {
-        subject: summary,
-        teacher,
-        room: location,
-        startTime,
-        endTime,
-        dayOfWeek,
-        color: colorMap[summary],
-      });
-    }
-  }
-
-  return Array.from(slotMap.values());
-}
-
-/**
- * Build a stable deterministic ID from subject+day+startTime so re-importing
- * the same ICS file upserts rather than inserts new rows.
- */
-function makeStableId(cls: Omit<ClassPeriod, 'id'>): string {
-  const raw = `${cls.subject}|${cls.dayOfWeek}|${cls.startTime}`;
-  // Simple stable hash — good enough for deduplication
-  let hash = 0;
-  for (let i = 0; i < raw.length; i++) {
-    hash = (Math.imul(31, hash) + raw.charCodeAt(i)) >>> 0;
-  }
-  return `ics-${hash.toString(16)}`;
-}
+type Modal = 'none' | 'add' | 'edit' | 'ics';
 
 export default function Dashboard() {
   const { darkMode } = useApp();
   const [timetable, setTimetable] = useState<ClassPeriod[]>([]);
-  const [currentClass, setCurrentClass] = useState<ClassPeriod | null>(null);
-  const [nextClass, setNextClass] = useState<ClassPeriod | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState({ days:0, hours:0, minutes:0, seconds:0 });
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [showICSModal, setShowICSModal] = useState(false);
   const [error, setError] = useState('');
-  const scheduleRef = useRef<HTMLDivElement>(null);
+  const [modal, setModal] = useState<Modal>('none');
+  const [editTarget, setEditTarget] = useState<ClassPeriod | null>(null);
+  const [viewDay, setViewDay] = useState(() => {
+    const d = new Date().getDay();
+    return (d === 0 || d === 6) ? 1 : d;
+  });
+  const [countdown, setCountdown] = useState({ h:0, m:0, s:0 });
+  const [tick, setTick] = useState(0);
+  const countdownRef = useRef<ReturnType<typeof setInterval>|null>(null);
 
-  useEffect(() => { load(); }, []);
-  const load = async () => {
-    try { setLoading(true); setTimetable(await timetableService.getAll()); }
-    catch(e: any) { setError(e.message); } finally { setLoading(false); }
-  };
+  const load = useCallback(async () => {
+    try { setLoading(true); setTimetable(await timetableService.getAll()); setError(''); }
+    catch (e:any) { setError(e.message); } finally { setLoading(false); }
+  }, []);
 
+  useEffect(() => { load(); }, [load]);
+
+  // Tick every 30s to re-evaluate current/next class
   useEffect(() => {
-    const tick = () => {
-      setCurrentClass(getCurrentClass(timetable));
-      setNextClass(getNextClass(timetable));
+    const iv = setInterval(() => setTick(t => t+1), 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Countdown timer
+  useEffect(() => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    const next = getNextClass(timetable);
+    if (!next) return;
+    const update = () => {
+      const t = getTimeUntil(next.startTime, next.dayOfWeek);
+      setCountdown(t);
     };
-    tick();
-    const i = setInterval(tick, 10000);
-    return () => clearInterval(i);
-  }, [timetable]);
+    update();
+    countdownRef.current = setInterval(update, 1000);
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
+  }, [timetable, tick]);
 
-  useEffect(() => {
-    if (!nextClass) return;
-    const tick = () => setTimeRemaining(getTimeUntil(nextClass.startTime, nextClass.dayOfWeek));
-    tick();
-    const i = setInterval(tick, 1000);
-    return () => clearInterval(i);
-  }, [nextClass]);
+  const currentClass = getCurrentClass(timetable);
+  const nextClass = getNextClass(timetable);
+  const todayClasses = getTodaysClasses(timetable);
+  const viewClasses = timetable.filter(c => c.dayOfWeek === viewDay).sort((a,b) => parseTime(a.startTime)-parseTime(b.startTime));
 
-  const handleAdd = async (p: ClassPeriod) => {
-    await timetableService.upsert(p);
-    // Replace if same id already exists, else append
-    setTimetable(prev => {
-      const exists = prev.find(c => c.id === p.id);
-      return exists ? prev.map(c => c.id === p.id ? p : c) : [...prev, p];
-    });
-    setShowModal(false);
-  };
-
-  const handleDelete = async (id: string) => {
-    await timetableService.delete(id);
-    setTimetable(prev => prev.filter(c => c.id !== id));
-  };
-
-  /**
-   * ICS import: assign stable IDs, upsert each slot, then merge into state
-   * without creating duplicates if the user imports the same file twice.
-   */
-  const handleICSImport = async (classes: Omit<ClassPeriod, 'id'>[]) => {
-    const incoming: ClassPeriod[] = classes.map(cls => ({
-      ...cls,
-      id: makeStableId(cls),
-    }));
-
-    // Upsert all in parallel
-    await Promise.all(incoming.map(p => timetableService.upsert(p)));
-
-    // Merge into current state: update existing, append new
-    setTimetable(prev => {
-      const map = new Map(prev.map(c => [c.id, c]));
-      for (const p of incoming) map.set(p.id, p);
-      return Array.from(map.values());
-    });
-
-    setShowICSModal(false);
-  };
-
-  const todaysClasses = getTodaysClasses(timetable);
+  const now = new Date();
+  const h = now.getHours();
+  const greeting = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  const dateStr = now.toLocaleDateString('en-AU', { weekday:'long', day:'numeric', month:'long' });
 
   const glass = darkMode
-    ? 'backdrop-blur-xl bg-white/5 border border-white/10'
-    : 'backdrop-blur-xl bg-white/60 border border-white/70';
-  const cardBg = darkMode
-    ? 'bg-white/5 border border-white/10'
-    : 'bg-white/70 border border-white/80';
+    ? 'backdrop-blur-2xl bg-black/20 border-white/10'
+    : 'backdrop-blur-2xl bg-white/40 border-white/60';
+
+  const card = darkMode
+    ? 'bg-gray-900/60 border-white/10 backdrop-blur-sm'
+    : 'bg-white/60 border-white/70 backdrop-blur-sm';
+
+  const handleDelete = async (id: string) => {
+    setTimetable(prev => prev.filter(c => c.id !== id));
+    try { await timetableService.delete(id); }
+    catch (e:any) { setError(e.message); load(); }
+  };
+
+  const pad = (n: number) => String(n).padStart(2, '0');
 
   return (
-    <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} className="w-full">
+    <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} className="min-h-screen p-6 md:p-8 lg:p-10">
+      <div className="max-w-4xl mx-auto space-y-6">
 
-      {/* HERO */}
-      <section className="relative min-h-[calc(100vh-5rem)] flex flex-col px-6 md:px-10 pt-10 pb-16 w-full">
-
-        <motion.div initial={{ opacity:0, y:-24 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.1 }} className="mb-10">
-          <h1 className={`text-4xl md:text-6xl font-light mb-2 ${darkMode?'text-white':'text-gray-900'}`}>{getGreeting()} 👋</h1>
-          <p className={`text-lg ${darkMode?'text-white/50':'text-gray-500'}`}>{getFormattedDate()}</p>
+        {/* ── HERO ── */}
+        <motion.div initial={{ opacity:0, y:-20 }} animate={{ opacity:1, y:0 }} className="flex items-end justify-between gap-4 flex-wrap pt-2">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-1">
+              {h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening'}
+            </p>
+            <h1 className="text-4xl md:text-5xl font-light text-gray-900 dark:text-white tracking-tight">
+              {greeting}
+            </h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1.5">{dateStr}</p>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <motion.button whileHover={{ scale:1.04 }} whileTap={{ scale:0.96 }}
+              onClick={() => setModal('ics')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium border transition-colors ${darkMode ? 'bg-white/10 border-white/15 text-gray-200 hover:bg-white/20' : 'bg-white/50 border-white/60 text-gray-700 hover:bg-white/80'}`}>
+              <Upload className="w-3.5 h-3.5" /> Import .ics
+            </motion.button>
+            <motion.button whileHover={{ scale:1.04 }} whileTap={{ scale:0.96 }}
+              onClick={() => { setEditTarget(null); setModal('add'); }}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white transition-colors">
+              <Plus className="w-3.5 h-3.5" /> Add class
+            </motion.button>
+          </div>
         </motion.div>
 
-        {/* Action buttons */}
-        <div className="absolute top-10 right-6 md:right-10 flex items-center gap-2">
-          <motion.button onClick={() => setShowICSModal(true)} whileHover={{ scale:1.04 }} whileTap={{ scale:0.96 }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium transition
-              ${darkMode?'bg-white/10 hover:bg-white/15 text-white border border-white/10':'bg-white/70 hover:bg-white/90 text-gray-700 border border-white/80 shadow-sm'}`}>
-            <Upload className="w-4 h-4"/>
-            <span className="hidden sm:inline">Import ICS</span>
-          </motion.button>
-          <motion.button onClick={() => setShowModal(true)} whileHover={{ scale:1.04 }} whileTap={{ scale:0.96 }}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm shadow-lg shadow-emerald-600/20">
-            <Plus className="w-4 h-4"/>
-            <span className="hidden sm:inline">Add Class</span>
-          </motion.button>
-        </div>
-
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <Loader2 className="w-10 h-10 animate-spin text-emerald-500"/>
+        {error && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm">
+            <span className="flex-1">{error}</span>
+            <button onClick={() => setError('')}><X className="w-4 h-4" /></button>
           </div>
-        ) : (
-          <motion.div initial={{ opacity:0, scale:0.96, y:20 }} animate={{ opacity:1, scale:1, y:0 }}
-            transition={{ delay:0.2, type:'spring', stiffness:200, damping:24 }}
-            className="flex-1 flex items-center w-full">
-            <AnimatePresence mode="wait">
-
-              {currentClass && (
-                <motion.div key="current" initial={{ opacity:0, scale:0.95 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.95 }}
-                  className={`w-full rounded-3xl p-10 relative overflow-hidden ${glass}`}>
-                  <motion.div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
-                    animate={{ x:['-100%','100%'] }} transition={{ duration:3, repeat:Infinity, ease:'linear' }}/>
-                  <div className="absolute inset-0 rounded-3xl opacity-20" style={{ background:`radial-gradient(circle at 30% 50%, ${currentClass.color}, transparent 70%)` }}/>
-                  <div className="relative">
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/20 text-green-500 text-sm font-medium mb-6">
-                      <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"/> In class now
-                    </div>
-                    <h2 className={`text-4xl md:text-5xl font-light mb-6 ${darkMode?'text-white':'text-gray-900'}`}>{currentClass.subject}</h2>
-                    <div className={`flex flex-wrap gap-5 text-sm ${darkMode?'text-white/60':'text-gray-500'}`}>
-                      {currentClass.teacher && <span className="flex items-center gap-2"><User className="w-4 h-4"/>{currentClass.teacher}</span>}
-                      {currentClass.room && <span className="flex items-center gap-2"><MapPin className="w-4 h-4"/>{currentClass.room}</span>}
-                      <span className="flex items-center gap-2"><Clock className="w-4 h-4"/>{currentClass.startTime} – {currentClass.endTime}</span>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-
-              {nextClass && !currentClass && (
-                <motion.div key="countdown" initial={{ opacity:0, scale:0.95 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.95 }}
-                  className={`w-full rounded-3xl p-10 relative overflow-hidden ${glass}`}>
-                  <div className="absolute inset-0 rounded-3xl opacity-15" style={{ background:`radial-gradient(circle at 70% 50%, ${nextClass.color}, transparent 70%)` }}/>
-                  <div className="relative">
-                    <p className={`text-sm uppercase tracking-widest mb-8 ${darkMode?'text-white/40':'text-gray-400'}`}>Next class in</p>
-                    <div className="flex items-end gap-4 md:gap-10 mb-10">
-                      {timeRemaining.days > 0 && <TimeUnit value={timeRemaining.days} label="days" darkMode={darkMode}/>}
-                      <TimeUnit value={timeRemaining.hours} label="hrs" darkMode={darkMode}/>
-                      <TimeUnit value={timeRemaining.minutes} label="min" darkMode={darkMode}/>
-                      <TimeUnit value={timeRemaining.seconds} label="sec" darkMode={darkMode}/>
-                    </div>
-                    <div className="flex items-center gap-4 mb-6">
-                      <div className="w-1.5 h-12 rounded-full flex-shrink-0" style={{ backgroundColor:nextClass.color }}/>
-                      <div>
-                        <h3 className={`text-2xl md:text-3xl font-light ${darkMode?'text-white':'text-gray-900'}`}>{nextClass.subject}</h3>
-                        <p className={`text-sm mt-1 ${darkMode?'text-white/50':'text-gray-500'}`}>{getDayName(nextClass.dayOfWeek)} · {nextClass.startTime}</p>
-                      </div>
-                    </div>
-                    <div className={`flex flex-wrap gap-5 text-sm ${darkMode?'text-white/50':'text-gray-500'}`}>
-                      {nextClass.teacher && <span className="flex items-center gap-2"><User className="w-4 h-4"/>{nextClass.teacher}</span>}
-                      {nextClass.room && <span className="flex items-center gap-2"><MapPin className="w-4 h-4"/>{nextClass.room}</span>}
-                      <span className="flex items-center gap-2"><Clock className="w-4 h-4"/>{nextClass.startTime} – {nextClass.endTime}</span>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-
-              {!nextClass && !currentClass && (
-                <motion.div key="empty" initial={{ opacity:0, scale:0.95 }} animate={{ opacity:1, scale:1 }}
-                  className={`w-full rounded-3xl p-12 text-center ${glass}`}>
-                  <Calendar className={`w-14 h-14 mx-auto mb-5 ${darkMode?'text-white/20':'text-gray-300'}`}/>
-                  <h3 className={`text-2xl font-light mb-2 ${darkMode?'text-white':'text-gray-900'}`}>No upcoming classes</h3>
-                  <p className={`mb-6 ${darkMode?'text-white/40':'text-gray-400'}`}>Add your timetable or import an ICS file</p>
-                  <div className="flex items-center justify-center gap-3">
-                    <motion.button onClick={() => setShowICSModal(true)} whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
-                      className={`inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-medium border
-                        ${darkMode?'bg-white/10 text-white border-white/10 hover:bg-white/15':'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
-                      <Upload className="w-4 h-4"/> Import ICS
-                    </motion.button>
-                    <motion.button onClick={() => setShowModal(true)} whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
-                      className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium">
-                      <Plus className="w-4 h-4"/> Add Class
-                    </motion.button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
         )}
 
-        {todaysClasses.length > 0 && (
-          <motion.button
-            onClick={() => scheduleRef.current?.scrollIntoView({ behavior:'smooth', block:'start' })}
-            initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ delay:0.8 }}
-            className={`absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 text-xs uppercase tracking-widest transition-colors
-              ${darkMode?'text-white/30 hover:text-white/60':'text-gray-400 hover:text-gray-600'}`}>
-            <span>Today's schedule</span>
-            <motion.div animate={{ y:[0,6,0] }} transition={{ duration:1.5, repeat:Infinity, ease:'easeInOut' }}>
-              <ChevronDown className="w-4 h-4"/>
+        {/* ── IN CLASS BANNER ── */}
+        <AnimatePresence>
+          {currentClass && (
+            <motion.div key="in-class" initial={{ opacity:0, y:-10, scale:0.98 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0, y:-10, scale:0.98 }}
+              className={`flex items-center gap-4 px-6 py-4 rounded-2xl border ${darkMode ? 'bg-red-500/10 border-red-400/20' : 'bg-red-50/80 border-red-200/60'}`}>
+              <span className="relative flex-shrink-0">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500 block" />
+                <span className="absolute inset-0 rounded-full bg-red-500 animate-ping opacity-60" />
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 dark:text-white">{currentClass.subject}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{currentClass.room} · {currentClass.teacher} · ends {currentClass.endTime}</p>
+              </div>
+              <span className="text-xs font-semibold uppercase tracking-wider text-red-500 dark:text-red-400">In class</span>
             </motion.div>
-          </motion.button>
-        )}
-      </section>
+          )}
+        </AnimatePresence>
 
-      {/* TODAY'S SCHEDULE */}
-      {todaysClasses.length > 0 && (
-        <section ref={scheduleRef} className="px-6 md:px-10 pb-16 w-full">
-          <motion.div initial={{ opacity:0, y:30 }} whileInView={{ opacity:1, y:0 }} viewport={{ once:true, margin:'-80px' }} transition={{ duration:0.5 }}>
-            <h2 className={`text-2xl font-light mb-8 ${darkMode?'text-white':'text-gray-900'}`}>Today's Schedule</h2>
-            <div className="space-y-0">
-              {todaysClasses.map((cls, i) => (
-                <ScheduleRow key={cls.id} classData={cls} index={i} total={todaysClasses.length}
-                  onDelete={handleDelete} darkMode={darkMode} cardBg={cardBg}
-                  isNow={currentClass?.id === cls.id} isPast={isPastClass(cls)}/>
-              ))}
-            </div>
-          </motion.div>
-        </section>
-      )}
+        {/* ── COUNTDOWN CARD ── */}
+        <motion.div initial={{ opacity:0, scale:0.97 }} animate={{ opacity:1, scale:1 }} transition={{ delay:0.1 }}
+          className={`relative overflow-hidden rounded-3xl border px-8 py-10 text-center ${glass}`}>
 
-      {/* FULL TIMETABLE */}
-      {timetable.length > 0 && (
-        <section className="px-6 md:px-10 pb-20 w-full">
-          <motion.div initial={{ opacity:0, y:30 }} whileInView={{ opacity:1, y:0 }} viewport={{ once:true, margin:'-80px' }} transition={{ duration:0.5 }}>
-            <h2 className={`text-2xl font-light mb-8 ${darkMode?'text-white':'text-gray-900'}`}>Full Timetable</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
-              {[1,2,3,4,5].map(day => {
-                const dc = timetable.filter(c => c.dayOfWeek === day).sort((a,b) => a.startTime.localeCompare(b.startTime));
-                if (!dc.length) return null;
-                const isToday = new Date().getDay() === day;
+          {/* Glow effect */}
+          <div className="absolute inset-0 pointer-events-none">
+            <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-96 h-32 rounded-full blur-3xl opacity-30 ${darkMode ? 'bg-emerald-500' : 'bg-emerald-300'}`} />
+          </div>
+
+          <div className="relative">
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
+              </div>
+            ) : timetable.length === 0 ? (
+              <div className="py-6">
+                <Calendar className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-700" />
+                <p className="text-lg font-light text-gray-900 dark:text-white mb-2">No timetable yet</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Import your .ics file or add classes manually</p>
+                <div className="flex gap-3 justify-center flex-wrap">
+                  <button onClick={() => setModal('ics')} className={`px-5 py-2.5 rounded-full text-sm font-medium border transition-colors ${darkMode ? 'bg-white/10 border-white/15 text-gray-200 hover:bg-white/20' : 'bg-white/60 border-white/60 text-gray-700 hover:bg-white/90'}`}>
+                    Import .ics
+                  </button>
+                  <button onClick={() => { setEditTarget(null); setModal('add'); }} className="px-5 py-2.5 rounded-full text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white transition-colors">
+                    Add class
+                  </button>
+                </div>
+              </div>
+            ) : !nextClass ? (
+              <div className="py-6">
+                <p className="text-5xl mb-4">🎉</p>
+                <p className="text-xl font-light text-gray-900 dark:text-white mb-2">No more classes today</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Enjoy your free time</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-7">
+                  {currentClass ? 'Next up after current class' : 'Next class in'}
+                </p>
+
+                {/* Digit blocks */}
+                <div className="flex items-start justify-center gap-1.5 mb-8">
+                  {(countdown.h > 0 || countdown.h === 0) && (
+                    <>
+                      <DigitBlock value={pad(countdown.h)} label="hrs" dark={darkMode} />
+                      <Colon dark={darkMode} />
+                    </>
+                  )}
+                  <DigitBlock value={pad(countdown.m)} label="min" dark={darkMode} />
+                  <Colon dark={darkMode} />
+                  <DigitBlock value={pad(countdown.s)} label="sec" dark={darkMode} />
+                </div>
+
+                {/* Subject name */}
+                <p className="text-2xl font-light text-gray-900 dark:text-white mb-4 tracking-tight">
+                  {nextClass.subject}
+                </p>
+
+                {/* Meta pills */}
+                <div className="flex items-center justify-center gap-2 flex-wrap">
+                  {[
+                    { icon: Clock, text: `${nextClass.startTime}–${nextClass.endTime}` },
+                    { icon: MapPin, text: nextClass.room },
+                    { icon: User, text: nextClass.teacher },
+                    { icon: Calendar, text: DAYS[nextClass.dayOfWeek] },
+                  ].filter(p => p.text).map((p, i) => {
+                    const Icon = p.icon;
+                    return (
+                      <span key={i} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${darkMode ? 'bg-emerald-500/15 text-emerald-300' : 'bg-emerald-500/10 text-emerald-700'}`}>
+                        <Icon className="w-3 h-3" />{p.text}
+                      </span>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </motion.div>
+
+        {/* ── DAY SCHEDULE ── */}
+        {!loading && timetable.length > 0 && (
+          <div>
+            {/* Day tabs */}
+            <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-none">
+              {[1,2,3,4,5].map(d => {
+                const count = timetable.filter(c => c.dayOfWeek === d).length;
+                const isToday = d === new Date().getDay();
+                const isActive = d === viewDay;
                 return (
-                  <motion.div key={day} initial={{ opacity:0, y:20 }} whileInView={{ opacity:1, y:0 }}
-                    viewport={{ once:true }} transition={{ delay:(day-1)*0.05 }}
-                    className={`rounded-2xl p-4 ${cardBg} ${isToday?'ring-2 ring-emerald-500/40':''}`}>
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className={`text-sm font-semibold ${darkMode?'text-white':'text-gray-900'}`}>{DAYS[day]}</h3>
-                      {isToday && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500">Today</span>}
-                    </div>
-                    <div className="space-y-2">
-                      {dc.map(cls => (
-                        <div key={cls.id} className="flex items-center gap-2.5 group">
-                          <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor:cls.color }}/>
-                          <div className="flex-1 min-w-0">
-                            <div className={`text-xs font-medium truncate ${darkMode?'text-white':'text-gray-900'}`}>{cls.subject}</div>
-                            <div className={`text-xs ${darkMode?'text-white/40':'text-gray-400'}`}>{cls.startTime} · {cls.room}</div>
-                          </div>
-                          <motion.button onClick={() => handleDelete(cls.id)} whileHover={{ scale:1.1 }} whileTap={{ scale:0.9 }}
-                            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-500 transition-opacity flex-shrink-0">
-                            <Trash2 className="w-3.5 h-3.5"/>
-                          </motion.button>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
+                  <button key={d} onClick={() => setViewDay(d)}
+                    className={`flex flex-col items-center gap-0.5 px-4 py-2.5 rounded-2xl transition-all flex-shrink-0 border ${
+                      isActive
+                        ? darkMode
+                          ? 'bg-emerald-500/20 border-emerald-400/25 text-emerald-300'
+                          : 'bg-emerald-500/12 border-emerald-300/40 text-emerald-700'
+                        : darkMode
+                          ? 'bg-white/5 border-white/8 text-gray-400 hover:bg-white/10'
+                          : 'bg-white/40 border-white/50 text-gray-500 hover:bg-white/70'
+                    }`}>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider">{DAYS_SHORT[d]}</span>
+                    <span className={`text-lg font-light ${isActive ? '' : 'text-gray-900 dark:text-white'}`}>{count}</span>
+                    {count > 0 && (
+                      <span className={`w-1 h-1 rounded-full ${isActive ? 'bg-current' : 'bg-emerald-400'}`} />
+                    )}
+                    {isToday && !isActive && (
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-500">Today</span>
+                    )}
+                  </button>
                 );
               })}
             </div>
-          </motion.div>
-        </section>
-      )}
 
-      {error && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm backdrop-blur-xl z-50">
-          {error}
-        </div>
-      )}
+            {/* Section label */}
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-3 px-1">
+              {viewDay === new Date().getDay() ? "Today's schedule" : `${DAYS[viewDay]}'s schedule`}
+            </p>
 
+            {/* Class list */}
+            <div className="space-y-2.5">
+              {viewClasses.length === 0 ? (
+                <div className={`rounded-2xl border px-6 py-8 text-center text-sm text-gray-400 dark:text-gray-600 border-dashed ${darkMode ? 'border-white/10' : 'border-gray-200'}`}>
+                  No classes on {DAYS[viewDay]}
+                </div>
+              ) : (
+                viewClasses.map((cls, i) => {
+                  const nowMins = new Date().getHours()*60+new Date().getMinutes();
+                  const startM = parseTime(cls.startTime);
+                  const endM = parseTime(cls.endTime);
+                  const isNow = viewDay===new Date().getDay() && startM<=nowMins && endM>nowMins;
+                  const isPast = viewDay===new Date().getDay() && endM<=nowMins;
+                  const isNext = !isNow && !isPast && viewDay===new Date().getDay()
+                    && viewClasses.findIndex(x=>parseTime(x.startTime)>nowMins)===i;
+
+                  return (
+                    <motion.div key={cls.id}
+                      initial={{ opacity:0, x:-16 }} animate={{ opacity:1, x:0 }} transition={{ delay:i*0.04 }}
+                      className={`flex items-center gap-4 px-5 py-4 rounded-2xl border transition-all group ${
+                        isNow
+                          ? darkMode ? 'bg-emerald-500/10 border-emerald-400/20' : 'bg-emerald-50/80 border-emerald-200/60'
+                          : isPast
+                            ? darkMode ? 'bg-white/3 border-white/5 opacity-40' : 'bg-white/20 border-white/30 opacity-50'
+                            : card
+                      }`}>
+
+                      {/* Colour bar */}
+                      <div className="w-0.5 h-10 rounded-full flex-shrink-0 transition-all group-hover:h-14" style={{ backgroundColor: cls.color }} />
+
+                      {/* Time */}
+                      <div className="flex-shrink-0 text-right w-16">
+                        <p className={`text-sm font-semibold tabular-nums ${isNow ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-900 dark:text-white'}`}>{cls.startTime}</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-600 tabular-nums">{cls.endTime}</p>
+                      </div>
+
+                      {/* Divider */}
+                      <div className={`w-px h-8 flex-shrink-0 ${darkMode ? 'bg-white/10' : 'bg-gray-200/80'}`} />
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-gray-900 dark:text-white truncate">{cls.subject}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                          {[cls.teacher, cls.room].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+
+                      {/* Badge */}
+                      {isNow && <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex-shrink-0">Now</span>}
+                      {isNext && <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500 flex-shrink-0">Next</span>}
+
+                      {/* Actions */}
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                        <button onClick={() => { setEditTarget(cls); setModal('edit'); }}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleDelete(cls.id)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── MODALS ── */}
       <AnimatePresence>
-        {showModal && <AddClassModal onClose={() => setShowModal(false)} onAdd={handleAdd} darkMode={darkMode}/>}
-        {showICSModal && <ICSImportModal onClose={() => setShowICSModal(false)} onImport={handleICSImport} darkMode={darkMode}/>}
+        {(modal === 'add' || modal === 'edit') && (
+          <ClassModal
+            dark={darkMode}
+            existing={editTarget}
+            onClose={() => setModal('none')}
+            onSave={async cls => {
+              await timetableService.upsert(cls);
+              await load();
+              setModal('none');
+              setViewDay(cls.dayOfWeek);
+            }}
+          />
+        )}
+        {modal === 'ics' && (
+          <IcsModal
+            dark={darkMode}
+            onClose={() => setModal('none')}
+            onImport={async periods => {
+              await timetableService.replaceAll(periods);
+              await load();
+              setModal('none');
+              const d = new Date().getDay();
+              setViewDay(d===0||d===6 ? 1 : d);
+            }}
+          />
+        )}
       </AnimatePresence>
     </motion.div>
   );
 }
 
-function isPastClass(cls: ClassPeriod): boolean {
-  const now = new Date();
-  if (cls.dayOfWeek !== now.getDay()) return false;
-  const [h, m] = cls.endTime.split(':').map(Number);
-  return now.getHours() * 60 + now.getMinutes() > h * 60 + m;
-}
-
-function TimeUnit({ value, label, darkMode }: { value:number; label:string; darkMode:boolean }) {
+// ── DIGIT BLOCK ───────────────────────────────────────────────────────
+function DigitBlock({ value, label, dark }: { value: string; label: string; dark: boolean }) {
   return (
-    <div className="flex flex-col items-center">
-      <motion.div key={value} initial={{ y:-12, opacity:0 }} animate={{ y:0, opacity:1 }}
-        className={`text-5xl md:text-7xl font-extralight tabular-nums ${darkMode?'text-white':'text-gray-900'}`}>
-        {String(value).padStart(2,'0')}
+    <div className="flex flex-col items-center gap-1.5">
+      <motion.div
+        key={value}
+        initial={{ y: -6, opacity: 0.6 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.1 }}
+        className={`min-w-[80px] px-4 py-4 rounded-2xl border text-center font-mono text-4xl md:text-5xl font-light tabular-nums ${dark ? 'bg-white/8 border-white/12 text-white' : 'bg-white/50 border-white/70 text-gray-900'}`}>
+        {value}
       </motion.div>
-      <div className={`text-xs uppercase tracking-widest mt-1 ${darkMode?'text-white/30':'text-gray-400'}`}>{label}</div>
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600">{label}</span>
     </div>
   );
 }
 
-function ScheduleRow({ classData, index, total, onDelete, darkMode, cardBg, isNow, isPast }: {
-  classData: ClassPeriod; index: number; total: number; onDelete: (id:string) => void;
-  darkMode: boolean; cardBg: string; isNow: boolean; isPast: boolean;
-}) {
-  const [hovered, setHovered] = useState(false);
+function Colon({ dark }: { dark: boolean }) {
   return (
-    <motion.div initial={{ opacity:0, x:-20 }} whileInView={{ opacity:1, x:0 }} viewport={{ once:true }} transition={{ delay:index*0.06 }}
-      onHoverStart={() => setHovered(true)} onHoverEnd={() => setHovered(false)} className="flex gap-4 items-stretch pb-2">
-      <div className="flex-shrink-0 w-16 text-right pt-4">
-        <div className={`text-sm font-medium ${isPast?(darkMode?'text-white/30':'text-gray-300'):(darkMode?'text-white/80':'text-gray-700')}`}>{classData.startTime}</div>
-        <div className={`text-xs ${darkMode?'text-white/20':'text-gray-400'}`}>{classData.endTime}</div>
-      </div>
-      <div className="flex flex-col items-center flex-shrink-0 pt-4">
-        <div className="w-3.5 h-3.5 rounded-full flex-shrink-0 ring-2 ring-offset-2"
-          style={{ backgroundColor:isPast?(darkMode?'#374151':'#d1d5db'):classData.color, borderColor:classData.color }}/>
-        {index < total-1 && <div className={`w-px flex-1 mt-1 ${darkMode?'bg-white/10':'bg-gray-200'}`} style={{ minHeight:'2rem' }}/>}
-      </div>
-      <motion.div whileHover={{ x:4 }} className={`flex-1 rounded-2xl p-4 mb-2 transition-all ${cardBg} ${isNow?'ring-2 ring-emerald-500/40':''} ${isPast?'opacity-40':''}`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-1 h-10 rounded-full flex-shrink-0" style={{ backgroundColor:classData.color }}/>
-            <div>
-              <div className="flex items-center gap-2">
-                <h4 className={`font-medium ${darkMode?'text-white':'text-gray-900'}`}>{classData.subject}</h4>
-                {isNow && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/20 text-green-500 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"/> Now
-                  </span>
-                )}
-              </div>
-              <div className={`flex gap-3 text-xs mt-1 ${darkMode?'text-white/40':'text-gray-500'}`}>
-                {classData.teacher && <span className="flex items-center gap-1"><User className="w-3 h-3"/>{classData.teacher}</span>}
-                {classData.room && <span className="flex items-center gap-1"><MapPin className="w-3 h-3"/>{classData.room}</span>}
-              </div>
-            </div>
-          </div>
-          <AnimatePresence>
-            {hovered && (
-              <motion.button initial={{ opacity:0, scale:0.8 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.8 }}
-                onClick={() => onDelete(classData.id)} className="text-red-400 hover:text-red-500 ml-3 flex-shrink-0"
-                whileHover={{ scale:1.1 }} whileTap={{ scale:0.9 }}>
-                <Trash2 className="w-4 h-4"/>
-              </motion.button>
-            )}
-          </AnimatePresence>
-        </div>
-      </motion.div>
-    </motion.div>
+    <span className={`text-3xl font-light mt-3 select-none ${dark ? 'text-white/20' : 'text-gray-300'}`}>:</span>
   );
 }
 
-function ICSImportModal({ onClose, onImport, darkMode }: {
+// ── CLASS MODAL ───────────────────────────────────────────────────────
+function ClassModal({ dark, existing, onClose, onSave }: {
+  dark: boolean;
+  existing: ClassPeriod | null;
   onClose: () => void;
-  onImport: (classes: Omit<ClassPeriod,'id'>[]) => Promise<void>;
-  darkMode: boolean;
+  onSave: (c: ClassPeriod) => Promise<void>;
 }) {
-  const [dragging, setDragging] = useState(false);
-  const [parsed, setParsed] = useState<Omit<ClassPeriod,'id'>[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [subject, setSubject] = useState(existing?.subject ?? '');
+  const [teacher, setTeacher] = useState(existing?.teacher ?? '');
+  const [room, setRoom] = useState(existing?.room ?? '');
+  const [day, setDay] = useState(existing?.dayOfWeek ?? 1);
+  const [start, setStart] = useState(existing?.startTime ?? '09:00');
+  const [end, setEnd] = useState(existing?.endTime ?? '10:00');
+  const [color, setColor] = useState(existing?.color ?? COLORS[0]);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
 
-  const processFile = (file: File) => {
-    if (!file.name.endsWith('.ics')) { setError('Please upload a .ics file'); return; }
-    setError('');
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const classes = parseICS(text);
-      if (!classes.length) {
-        setError('No weekday classes found. Make sure the file contains VEVENT entries with date/time info.');
-        return;
-      }
-      setParsed(classes);
-    };
-    reader.readAsText(file);
-  };
-
-  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) processFile(f); };
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (f) processFile(f); };
-  const handleImport = async () => {
-    setLoading(true);
-    try { await onImport(parsed); }
-    catch(e: any) { setError(e.message); }
-    finally { setLoading(false); }
-  };
-
-  const modalBg = darkMode ? 'bg-gray-900 border border-white/10' : 'bg-white border border-gray-100';
-  const dropBg = dragging
-    ? (darkMode ? 'bg-emerald-500/20 border-emerald-500' : 'bg-emerald-50 border-emerald-500')
-    : (darkMode ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-gray-50 border-gray-200 hover:bg-gray-100');
-
-  // Count unique subjects for the preview
-  const uniqueSubjects = [...new Set(parsed.map(c => c.subject))].length;
-
-  return (
-    <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <motion.div initial={{ opacity:0, scale:0.95, y:20 }} animate={{ opacity:1, scale:1, y:0 }}
-        exit={{ opacity:0, scale:0.95, y:20 }} transition={{ type:'spring', stiffness:300, damping:28 }}
-        className={`w-full max-w-lg rounded-3xl p-8 shadow-2xl ${modalBg}`}>
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className={`text-2xl font-light ${darkMode?'text-white':'text-gray-900'}`}>Import Timetable</h2>
-            <p className={`text-sm mt-1 ${darkMode?'text-white/40':'text-gray-400'}`}>Upload a .ics file from your school calendar</p>
-          </div>
-          <button onClick={onClose} className={`${darkMode?'text-white/30 hover:text-white/70':'text-gray-400 hover:text-gray-700'} transition-colors`}>
-            <X className="w-5 h-5"/>
-          </button>
-        </div>
-
-        {!parsed.length ? (
-          <>
-            <div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop} onClick={() => fileRef.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${dropBg}`}>
-              <input ref={fileRef} type="file" accept=".ics" onChange={handleFileInput} className="hidden"/>
-              <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode?'text-white/30':'text-gray-300'}`}/>
-              <p className={`font-medium ${darkMode?'text-white/70':'text-gray-600'}`}>Drop your .ics file here</p>
-              <p className={`text-sm mt-1 ${darkMode?'text-white/30':'text-gray-400'}`}>or click to browse</p>
-            </div>
-            <div className={`mt-4 p-4 rounded-xl text-sm ${darkMode?'bg-white/5 text-white/40':'bg-gray-50 text-gray-400'}`}>
-              💡 Export from Google Calendar: Settings → your calendar → Export. From school portals: look for "Export" or "Subscribe" and download the .ics file.
-            </div>
-          </>
-        ) : (
-          <>
-            <div className={`rounded-2xl p-4 mb-4 ${darkMode?'bg-white/5':'bg-gray-50'}`}>
-              <p className={`text-sm font-medium mb-3 ${darkMode?'text-white/60':'text-gray-500'}`}>
-                Found {parsed.length} unique class slots across {uniqueSubjects} subject{uniqueSubjects !== 1 ? 's' : ''} —
-                re-importing this file won't create duplicates.
-              </p>
-              <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {parsed.map((cls, i) => (
-                  <div key={i} className="flex items-center gap-2.5">
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor:cls.color }}/>
-                    <span className={`text-sm flex-1 truncate ${darkMode?'text-white':'text-gray-800'}`}>{cls.subject}</span>
-                    <span className={`text-xs ${darkMode?'text-white/30':'text-gray-400'}`}>{DAYS[cls.dayOfWeek]} {cls.startTime}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setParsed([])}
-                className={`flex-1 py-3 rounded-xl font-medium text-sm transition ${darkMode?'bg-white/5 hover:bg-white/10 text-white/70':'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}>
-                Choose different file
-              </button>
-              <motion.button onClick={handleImport} disabled={loading} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
-                className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm disabled:opacity-50 transition flex items-center justify-center gap-2">
-                {loading && <Loader2 className="w-4 h-4 animate-spin"/>}
-                {loading ? 'Importing…' : `Import ${parsed.length} classes`}
-              </motion.button>
-            </div>
-          </>
-        )}
-
-        {error && <div className="mt-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm">{error}</div>}
-      </motion.div>
-    </motion.div>
-  );
-}
-
-function AddClassModal({ onClose, onAdd, darkMode }: {
-  onClose: () => void; onAdd: (p: ClassPeriod) => Promise<void>; darkMode: boolean;
-}) {
-  const [subject, setSubject] = useState('');
-  const [teacher, setTeacher] = useState('');
-  const [room, setRoom] = useState('');
-  const [day, setDay] = useState(1);
-  const [start, setStart] = useState('09:00');
-  const [end, setEnd] = useState('10:00');
-  const [color, setColor] = useState(COLORS[0]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const inputCls = `w-full px-4 py-3 rounded-xl text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500
-    ${darkMode ? 'bg-white/5 border border-white/10 text-white placeholder-white/30' : 'bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400'}`;
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault(); setError('');
-    // For manually added classes, use a stable ID based on subject+day+time too
-    const stableId = makeStableId({ subject: subject.trim(), teacher: teacher.trim(), room: room.trim(), dayOfWeek: day, startTime: start, endTime: end, color });
+  const submit = async () => {
+    setErr('');
+    if (!subject.trim()) { setErr('Subject is required'); return; }
+    if (parseTime(start) >= parseTime(end)) { setErr('End time must be after start time'); return; }
+    setSaving(true);
     try {
-      setLoading(true);
-      await onAdd({ id: stableId, subject: subject.trim(), teacher: teacher.trim(), room: room.trim(), dayOfWeek: day, startTime: start, endTime: end, color });
-    } catch(err: any) { setError(err.message); } finally { setLoading(false); }
+      await onSave({ id: existing?.id ?? `c-${Date.now()}`, subject: subject.trim(), teacher: teacher.trim(), room: room.trim(), dayOfWeek: day, startTime: start, endTime: end, color });
+    } catch (e:any) { setErr(e.message); setSaving(false); }
   };
+
+  const bg = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
+  const inp = dark
+    ? 'bg-white/8 border-white/10 text-white placeholder-gray-600 focus:border-emerald-500/50'
+    : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-emerald-400';
 
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <motion.div initial={{ opacity:0, scale:0.95, y:20 }} animate={{ opacity:1, scale:1, y:0 }}
-        exit={{ opacity:0, scale:0.95, y:20 }} transition={{ type:'spring', stiffness:300, damping:28 }}
-        className={`w-full max-w-md rounded-3xl p-8 max-h-[90vh] overflow-y-auto shadow-2xl ${darkMode?'bg-gray-900 border border-white/10':'bg-white border border-gray-100'}`}>
-        <div className="flex items-center justify-between mb-7">
-          <h2 className={`text-2xl font-light ${darkMode?'text-white':'text-gray-900'}`}>Add Class</h2>
-          <button onClick={onClose} className={`${darkMode?'text-white/30 hover:text-white/70':'text-gray-400 hover:text-gray-700'} transition-colors`}><X className="w-5 h-5"/></button>
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      onClick={e => e.target===e.currentTarget && onClose()}>
+      <motion.div initial={{ scale:0.96, opacity:0, y:12 }} animate={{ scale:1, opacity:1, y:0 }} exit={{ scale:0.96, opacity:0, y:12 }}
+        transition={{ type:'spring', stiffness:320, damping:28 }}
+        className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl ${bg}`}>
+
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{existing ? 'Edit class' : 'Add class'}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors"><X className="w-4 h-4" /></button>
         </div>
-        <form onSubmit={submit} className="space-y-4">
-          {([['Subject',subject,setSubject,'e.g. Mathematics'],['Teacher',teacher,setTeacher,'e.g. Mr Smith'],['Room',room,setRoom,'e.g. Room 204']] as [string,string,(v:string)=>void,string][]).map(([label,val,setter,ph]) => (
-            <div key={label}>
-              <label className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${darkMode?'text-white/40':'text-gray-400'}`}>{label}</label>
-              <input required value={val} onChange={e => setter(e.target.value)} placeholder={ph} className={inputCls}/>
-            </div>
-          ))}
+
+        <div className="space-y-3">
+          {/* Subject */}
+          <Inp label="Subject" value={subject} onChange={setSubject} placeholder="e.g. Mathematics" inp={inp} />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Inp label="Teacher" value={teacher} onChange={setTeacher} placeholder="Mr Smith" inp={inp} />
+            <Inp label="Room" value={room} onChange={setRoom} placeholder="Room 204" inp={inp} />
+          </div>
+
+          {/* Day */}
           <div>
-            <label className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${darkMode?'text-white/40':'text-gray-400'}`}>Day</label>
-            <select value={day} onChange={e => setDay(+e.target.value)} className={inputCls}>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">Day</label>
+            <select value={day} onChange={e => setDay(+e.target.value)}
+              className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`}>
               {[1,2,3,4,5].map(d => <option key={d} value={d}>{DAYS[d]}</option>)}
             </select>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
-            {([['Start',start,setStart],['End',end,setEnd]] as [string,string,(v:string)=>void][]).map(([label,val,setter]) => (
-              <div key={label}>
-                <label className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${darkMode?'text-white/40':'text-gray-400'}`}>{label}</label>
-                <input required type="time" value={val} onChange={e => setter(e.target.value)} className={inputCls}/>
-              </div>
-            ))}
+            <Inp label="Start" type="time" value={start} onChange={setStart} inp={inp} />
+            <Inp label="End" type="time" value={end} onChange={setEnd} inp={inp} />
           </div>
+
+          {/* Colours */}
           <div>
-            <label className={`block text-xs font-semibold uppercase tracking-wide mb-2 ${darkMode?'text-white/40':'text-gray-400'}`}>Colour</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Colour</label>
             <div className="flex gap-2 flex-wrap">
               {COLORS.map(c => (
-                <button key={c} type="button" onClick={() => setColor(c)}
-                  className={`w-8 h-8 rounded-full transition-all ${color===c?'ring-2 ring-offset-2 scale-110':'hover:scale-110 opacity-70 hover:opacity-100'}`}
-                  style={{ backgroundColor:c }}/>
+                <button key={c} onClick={() => setColor(c)}
+                  className={`w-7 h-7 rounded-full transition-all ${color===c ? 'ring-2 ring-offset-2 ring-gray-900 dark:ring-white scale-110' : 'hover:scale-110'}`}
+                  style={{ backgroundColor: c, ringOffsetColor: dark ? '#111827' : '#fff' }} />
               ))}
             </div>
           </div>
-          {error && <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm">{error}</div>}
-          <div className="flex gap-3 pt-1">
-            <button type="button" onClick={onClose}
-              className={`flex-1 py-3 rounded-xl font-medium text-sm transition ${darkMode?'bg-white/5 hover:bg-white/10 text-white/70':'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}>
-              Cancel
-            </button>
-            <motion.button type="submit" disabled={loading} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
-              className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm disabled:opacity-50 transition flex items-center justify-center gap-2">
-              {loading && <Loader2 className="w-4 h-4 animate-spin"/>}
-              {loading ? 'Saving…' : 'Add Class'}
-            </motion.button>
-          </div>
-        </form>
+
+          {err && <p className="text-sm text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20">{err}</p>}
+        </div>
+
+        <div className="flex gap-2.5 mt-5">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl border border-gray-200 dark:border-white/10 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+            Cancel
+          </button>
+          <motion.button onClick={submit} disabled={saving} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
+            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {saving ? 'Saving…' : existing ? 'Save changes' : 'Add class'}
+          </motion.button>
+        </div>
       </motion.div>
     </motion.div>
+  );
+}
+
+// ── ICS MODAL ─────────────────────────────────────────────────────────
+function IcsModal({ dark, onClose, onImport }: {
+  dark: boolean;
+  onClose: () => void;
+  onImport: (periods: ClassPeriod[]) => Promise<void>;
+}) {
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  const dayMap: Record<string,number> = { SU:0, MO:1, TU:2, WE:3, TH:4, FR:5, SA:6 };
+
+  const doImport = async () => {
+    setErr('');
+    if (!text.trim()) { setErr('Paste your .ics data first'); return; }
+    if (!text.includes('BEGIN:VCALENDAR')) { setErr("This doesn't look like valid ICS data. Copy the full file contents."); return; }
+
+    const get = (block: string, key: string) => {
+      const m = block.match(new RegExp(`${key}[^:]*:([^\\r\\n]+)`));
+      return m ? m[1].trim() : '';
+    };
+
+    const blocks = text.split('BEGIN:VEVENT').slice(1);
+    if (!blocks.length) { setErr('No events found in this file.'); return; }
+
+    const parsed: ClassPeriod[] = [];
+    for (const block of blocks) {
+      const summary = get(block,'SUMMARY');
+      const dtstart = get(block,'DTSTART');
+      if (!summary || !dtstart) continue;
+      const rrule = get(block,'RRULE');
+      const dtend = get(block,'DTEND');
+      const location = get(block,'LOCATION');
+
+      let dayOfWeek = 1;
+      if (rrule) {
+        const bd = rrule.match(/BYDAY=([A-Z,]+)/);
+        if (bd) dayOfWeek = dayMap[bd[1].split(',')[0].replace(/[-\d]/g,'')] ?? 1;
+      } else {
+        const ds = dtstart.replace(/[TZ]/g,'');
+        if (ds.length >= 8) dayOfWeek = new Date(`${ds.slice(0,4)}-${ds.slice(4,6)}-${ds.slice(6,8)}`).getDay();
+      }
+      if (dayOfWeek===0||dayOfWeek===6) continue;
+
+      const pt = (d: string) => { const t=d.replace(/.*T/,'').replace('Z',''); return t.length>=4?`${t.slice(0,2)}:${t.slice(2,4)}`:'09:00'; };
+      const startTime = pt(dtstart);
+      const endTime = dtend ? pt(dtend) : `${(parseInt(startTime.split(':')[0])+1).toString().padStart(2,'0')}:${startTime.split(':')[1]}`;
+
+      parsed.push({
+        id: `ics-${Date.now()}-${parsed.length}`,
+        subject: summary, teacher: '', room: location || '',
+        dayOfWeek, startTime, endTime,
+        color: COLORS[parsed.length % COLORS.length],
+      });
+    }
+
+    if (!parsed.length) { setErr('No weekday classes found. Check your ICS file has recurring weekday events.'); return; }
+    setSaving(true);
+    try { await onImport(parsed); }
+    catch (e:any) { setErr(e.message); setSaving(false); }
+  };
+
+  const bg = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
+  const inp = dark
+    ? 'bg-white/8 border-white/10 text-white placeholder-gray-600 focus:border-emerald-500/50'
+    : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-emerald-400';
+
+  return (
+    <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      onClick={e => e.target===e.currentTarget && onClose()}>
+      <motion.div initial={{ scale:0.96, opacity:0, y:12 }} animate={{ scale:1, opacity:1, y:0 }} exit={{ scale:0.96, opacity:0, y:12 }}
+        transition={{ type:'spring', stiffness:320, damping:28 }}
+        className={`w-full max-w-lg rounded-3xl border p-6 shadow-2xl ${bg}`}>
+
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import calendar</h2>
+          <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors"><X className="w-4 h-4" /></button>
+        </div>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+          Export your timetable from Google Calendar, Apple Calendar, or Outlook as an <strong className="font-semibold text-gray-700 dark:text-gray-300">.ics</strong> file, open it in a text editor, copy everything, and paste it below.
+          <br /><span className="text-xs text-amber-500 dark:text-amber-400 mt-1 block">⚠ This will replace your current timetable.</span>
+        </p>
+
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={9}
+          placeholder={"BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n..."}
+          className={`w-full px-4 py-3 rounded-2xl border text-xs font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`} />
+
+        {err && <p className="text-sm text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mt-3">{err}</p>}
+
+        <div className="flex gap-2.5 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl border border-gray-200 dark:border-white/10 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+            Cancel
+          </button>
+          <motion.button onClick={doImport} disabled={saving} whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
+            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {saving ? 'Importing…' : 'Import timetable'}
+          </motion.button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function Inp({ label, value, onChange, placeholder, type='text', inp }: {
+  label: string; value: string; onChange: (v:string)=>void; placeholder?: string; type?: string; inp: string;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">{label}</label>
+      <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+        className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`} />
+    </div>
   );
 }
