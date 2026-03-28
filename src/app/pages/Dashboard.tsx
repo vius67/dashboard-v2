@@ -269,7 +269,7 @@ export default function Dashboard() {
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="flex items-end justify-between gap-4 flex-wrap pt-2">
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-1">
-              {h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening'}
+              {h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'neil is a bum bum'}
             </p>
             <h1 className="text-4xl md:text-5xl font-light text-gray-900 dark:text-white tracking-tight">{greeting}</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1.5">{dateStr}</p>
