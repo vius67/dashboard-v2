@@ -122,18 +122,28 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const all = await timetableService.getAll();
-      // Primary timetable = all stored classes (the week imported)
-      setTimetable(all);
-      // Week B is stored separately if user did a two-week import
-      // For now week B lives in localStorage as a cache since DB only stores one week at a time
-      const cached = localStorage.getItem('weekB-timetable');
-      if (cached) setWeekBTimetable(JSON.parse(cached));
+      const { weekA, weekB } = await timetableService.getBothWeeks();
+      // Show the current week as the active timetable for countdown/today view
+      const current = getCurrentWeekType();
+      setTimetable(current === 'A' ? weekA : weekB);
+      setWeekBTimetable(current === 'A' ? weekB : weekA);
       setError('');
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Listen for keyboard shortcut events from Layout
+  useEffect(() => {
+    const onImport = () => setModal('ics');
+    const onNew = () => { setEditTarget(null); setModal('add'); };
+    window.addEventListener('dashboard:open-import', onImport);
+    window.addEventListener('dashboard:new-item', onNew);
+    return () => {
+      window.removeEventListener('dashboard:open-import', onImport);
+      window.removeEventListener('dashboard:new-item', onNew);
+    };
+  }, []);
 
   useEffect(() => {
     const iv = setInterval(() => setTick(t => t + 1), 30000);
@@ -532,13 +542,8 @@ export default function Dashboard() {
         {modal === 'ics' && (
           <IcsModal dark={darkMode} onClose={() => setModal('none')}
             onImport={async (weekA, weekB) => {
-              // Save current week to Supabase
-              const toSave = weekType === 'A' ? weekA : weekB;
-              await timetableService.replaceAll(toSave);
-              // Cache other week in localStorage
-              localStorage.setItem('weekB-timetable', JSON.stringify(weekType === 'A' ? weekB : weekA));
-              setTimetable(toSave);
-              setWeekBTimetable(weekType === 'A' ? weekB : weekA);
+              // Save BOTH weeks to Supabase with the week column
+              await timetableService.replaceBothWeeks(weekA, weekB);
               await load();
               setModal('none');
               const d = new Date().getDay();
@@ -648,46 +653,74 @@ function ClassModal({ dark, existing, onClose, onSave }: {
 }
 
 // ── ICS MODAL ─────────────────────────────────────────────────────────
-// ── ICS MODAL (two separate files: Week A + Week B) ──────────────────
+// ── ICS MODAL — file upload, separate Week A and Week B ──────────────
 function IcsModal({ dark, onClose, onImport }: {
   dark: boolean; onClose: () => void;
   onImport: (weekA: ClassPeriod[], weekB: ClassPeriod[]) => Promise<void>;
 }) {
-  const [textA,  setTextA]  = useState('');
-  const [textB,  setTextB]  = useState('');
-  const [saving, setSaving] = useState(false);
-  const [err,    setErr]    = useState('');
+  const [weekA, setWeekA] = React.useState<ClassPeriod[] | null>(null);
+  const [weekB, setWeekB] = React.useState<ClassPeriod[] | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [activeTab, setActiveTab] = React.useState<'A' | 'B'>('A');
 
-  const parseOne = (text: string, label: string): ClassPeriod[] | null => {
-    if (!text.trim()) { setErr(`Paste your Week ${label} .ics data`); return null; }
-    if (!text.includes('BEGIN:VCALENDAR')) { setErr(`Week ${label}: doesn't look like valid ICS data`); return null; }
-    const parsed = parseIcsToClasses(text);
-    if (!parsed.length) { setErr(`Week ${label}: no weekday classes found`); return null; }
-    return parsed;
+  const readFile = (file: File): Promise<string> =>
+    new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = e => res(e.target?.result as string ?? '');
+      r.onerror = () => rej(new Error('Could not read file'));
+      r.readAsText(file);
+    });
+
+  const handleFile = async (file: File, week: 'A' | 'B') => {
+    setErr('');
+    try {
+      const text = await readFile(file);
+      if (!text.includes('BEGIN:VCALENDAR')) { setErr(`Week ${week}: not a valid ICS file`); return; }
+      const parsed = parseIcsToClasses(text);
+      if (!parsed.length) { setErr(`Week ${week}: no weekday classes found`); return; }
+      if (week === 'A') setWeekA(parsed); else setWeekB(parsed);
+    } catch (e: any) { setErr(e.message); }
   };
 
   const doImport = async () => {
     setErr('');
-    const weekA = parseOne(textA, 'A');
-    if (!weekA) return;
-    const weekB = parseOne(textB, 'B');
-    if (!weekB) return;
+    if (!weekA) { setErr('Please upload Week A first'); return; }
+    if (!weekB) { setErr('Please upload Week B first'); return; }
     setSaving(true);
     try { await onImport(weekA, weekB); }
     catch (e: any) { setErr(e.message); setSaving(false); }
   };
 
   const bg  = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
-  const inp = dark ? 'bg-white/8 border-white/10 text-white placeholder-gray-600 focus:border-emerald-500/50'
-                   : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-emerald-400';
 
-  const countClasses = (text: string) => {
-    if (!text.includes('BEGIN:VCALENDAR')) return null;
-    return parseIcsToClasses(text).length;
-  };
-
-  const countA = textA ? countClasses(textA) : null;
-  const countB = textB ? countClasses(textB) : null;
+  const UploadZone = ({ week, data, accent }: { week: 'A' | 'B'; data: ClassPeriod[] | null; accent: string }) => (
+    <label className={`relative block w-full rounded-2xl border-2 border-dashed p-6 text-center cursor-pointer transition-all ${
+      data
+        ? week === 'A'
+          ? 'border-blue-400/50 bg-blue-500/5'
+          : 'border-purple-400/50 bg-purple-500/5'
+        : dark ? 'border-white/10 hover:border-white/20' : 'border-gray-200 hover:border-gray-300'
+    }`}>
+      <input type="file" accept=".ics" className="sr-only"
+        onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f, week); e.target.value = ''; }} />
+      {data ? (
+        <>
+          <div className={`text-2xl font-mono font-light mb-1 ${week === 'A' ? 'text-blue-500' : 'text-purple-500'}`}>{data.length}</div>
+          <div className={`text-xs font-mono ${week === 'A' ? 'text-blue-500 dark:text-blue-400' : 'text-purple-500 dark:text-purple-400'}`}>classes imported</div>
+          <div className="text-[10px] text-gray-400 dark:text-gray-600 mt-1 font-mono">click to replace</div>
+        </>
+      ) : (
+        <>
+          <Upload className={`w-6 h-6 mx-auto mb-2 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
+          <div className={`text-xs font-mono font-medium ${week === 'A' ? 'text-blue-500 dark:text-blue-400' : 'text-purple-500 dark:text-purple-400'}`}>
+            Week {week}
+          </div>
+          <div className={`text-[10px] font-mono mt-0.5 ${dark ? 'text-gray-600' : 'text-gray-400'}`}>drop .ics or click</div>
+        </>
+      )}
+    </label>
+  );
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -695,56 +728,27 @@ function IcsModal({ dark, onClose, onImport }: {
       onClick={e => e.target === e.currentTarget && onClose()}>
       <motion.div initial={{ scale: 0.96, opacity: 0, y: 12 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 12 }}
         transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-        className={`w-full max-w-lg rounded-3xl border p-6 shadow-2xl ${bg}`}>
+        className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl ${bg}`}>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import timetable</h2>
+          <h2 className="text-lg font-semibold font-mono text-gray-900 dark:text-white">import timetable</h2>
           <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors"><X className="w-4 h-4" /></button>
         </div>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
-          Export each week from Sentral as a separate <strong className="font-semibold text-gray-700 dark:text-gray-300">.ics</strong> file, open in a text editor, and paste each below.
+        <p className="text-xs font-mono text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          export each week from sentral as a separate <strong className="text-gray-700 dark:text-gray-300">.ics</strong> file and upload below.
         </p>
 
-        {/* Week A */}
-        <div className="mb-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <label className={`text-xs font-bold uppercase tracking-wider ${dark ? 'text-blue-300' : 'text-blue-700'}`}>Week A</label>
-            {countA !== null && (
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dark ? 'bg-blue-500/15 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
-                {countA} classes
-              </span>
-            )}
-          </div>
-          <textarea value={textA} onChange={e => setTextA(e.target.value)} rows={4}
-            placeholder={"BEGIN:VCALENDAR
-VERSION:2.0
-..."}
-            className={`w-full px-4 py-3 rounded-2xl border text-xs font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-colors ${inp}`} />
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <UploadZone week="A" data={weekA} accent="blue" />
+          <UploadZone week="B" data={weekB} accent="purple" />
         </div>
 
-        {/* Week B */}
-        <div className="mb-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <label className={`text-xs font-bold uppercase tracking-wider ${dark ? 'text-purple-300' : 'text-purple-700'}`}>Week B</label>
-            {countB !== null && (
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dark ? 'bg-purple-500/15 text-purple-300' : 'bg-purple-50 text-purple-700'}`}>
-                {countB} classes
-              </span>
-            )}
-          </div>
-          <textarea value={textB} onChange={e => setTextB(e.target.value)} rows={4}
-            placeholder={"BEGIN:VCALENDAR
-VERSION:2.0
-..."}
-            className={`w-full px-4 py-3 rounded-2xl border text-xs font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/30 transition-colors ${inp}`} />
-        </div>
-
-        {err && <p className="text-sm text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mb-3">{err}</p>}
+        {err && <p className="text-xs font-mono text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mb-3">{err}</p>}
         <div className="flex gap-2.5">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl border border-gray-200 dark:border-white/10 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">Cancel</button>
-          <motion.button onClick={doImport} disabled={saving || !textA.trim() || !textB.trim()} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
-            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl border border-gray-200 dark:border-white/10 text-sm font-mono font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">cancel</button>
+          <motion.button onClick={doImport} disabled={saving || !weekA || !weekB} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
+            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-mono font-medium text-white transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
             {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {saving ? 'Importing…' : 'Import Week A + B'}
+            {saving ? 'importing…' : 'import both weeks'}
           </motion.button>
         </div>
       </motion.div>
