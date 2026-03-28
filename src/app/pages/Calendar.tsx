@@ -1,43 +1,87 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, Loader2, CalendarDays } from 'lucide-react';
-import { calendarService } from '../../lib/db';
-import { CalendarEvent } from '../types';
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, Loader2, CalendarDays, BookOpen } from 'lucide-react';
+import { calendarService, homeworkService } from '../../lib/db';
+import { CalendarEvent, Homework } from '../types';
+import { useApp } from '../context/AppContext';
 
 const COLORS=['#10B981','#3B82F6','#8B5CF6','#F59E0B','#EF4444','#EC4899','#06B6D4','#84CC16'];
 const EVENT_TYPES:CalendarEvent['type'][]=['exam','assignment','event','reminder'];
-const TYPE_STYLE:Record<CalendarEvent['type'],string>={exam:'bg-red-500/20 text-red-600 dark:text-red-400',assignment:'bg-blue-500/20 text-blue-600 dark:text-blue-400',event:'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',reminder:'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400'};
+const TYPE_STYLE:Record<CalendarEvent['type'],string>={
+  exam:'bg-red-500/20 text-red-600 dark:text-red-400',
+  assignment:'bg-blue-500/20 text-blue-600 dark:text-blue-400',
+  event:'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+  reminder:'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400',
+};
+const HW_STATUS_STYLE:Record<Homework['status'],string>={
+  'not-started':'bg-red-500/20 text-red-600 dark:text-red-400',
+  'in-progress':'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400',
+  'done':'bg-green-500/20 text-green-600 dark:text-green-400',
+};
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAY_SHORT=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 export default function CalendarPage() {
-  const [events,setEvents]=useState<CalendarEvent[]>([]);
-  const [loading,setLoading]=useState(true);const [showModal,setShowModal]=useState(false);
-  const [selectedDate,setSelectedDate]=useState<string|null>(null);
-  const [viewDate,setViewDate]=useState(new Date());const [error,setError]=useState('');
+  const { darkMode } = useApp();
+  const [events,    setEvents]    = useState<CalendarEvent[]>([]);
+  const [homework,  setHomework]  = useState<Homework[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string|null>(null);
+  const [viewDate,  setViewDate]  = useState(new Date());
+  const [error,     setError]     = useState('');
+  const [sidebarTab, setSidebarTab] = useState<'upcoming'|'homework'>('upcoming');
 
-  useEffect(()=>{load();},[]);
-  const load=async()=>{try{setLoading(true);setEvents(await calendarService.getAll());}catch(e:any){setError(e.message);}finally{setLoading(false);}};
-  const handleAdd=async(ev:CalendarEvent)=>{await calendarService.add(ev);setEvents(prev=>[...prev,ev].sort((a,b)=>a.date.localeCompare(b.date)));setShowModal(false);};
-  const handleDelete=async(id:string)=>{try{await calendarService.delete(id);setEvents(prev=>prev.filter(e=>e.id!==id));}catch(e:any){setError(e.message);}};
+  useEffect(()=>{ load(); },[]);
 
-  const year=viewDate.getFullYear();const month=viewDate.getMonth();
-  const firstDay=new Date(year,month,1).getDay();const daysInMonth=new Date(year,month+1,0).getDate();
+  const load = async () => {
+    try {
+      setLoading(true);
+      const [evs, hws] = await Promise.all([calendarService.getAll(), homeworkService.getAll()]);
+      setEvents(evs);
+      setHomework(hws);
+    } catch(e:any) { setError(e.message); } finally { setLoading(false); }
+  };
+
+  const handleAdd = async (ev:CalendarEvent) => {
+    await calendarService.add(ev);
+    setEvents(prev=>[...prev,ev].sort((a,b)=>a.date.localeCompare(b.date)));
+    setShowModal(false);
+  };
+  const handleDelete = async (id:string) => {
+    try { await calendarService.delete(id); setEvents(prev=>prev.filter(e=>e.id!==id)); }
+    catch(e:any) { setError(e.message); }
+  };
+
+  const year=viewDate.getFullYear(); const month=viewDate.getMonth();
+  const firstDay=new Date(year,month,1).getDay(); const daysInMonth=new Date(year,month+1,0).getDate();
   const today=new Date().toISOString().split('T')[0];
 
   const eventsForDate=(d:number)=>{
     const ds=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     return events.filter(e=>e.date===ds);
   };
-  const selectedEvents=selectedDate?events.filter(e=>e.date===selectedDate):[];
-  const upcoming=events.filter(e=>e.date>=today).slice(0,8);
+  const homeworkForDate=(d:number)=>{
+    const ds=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    return homework.filter(h=>h.dueDate===ds);
+  };
+
+  const selectedEvents   = selectedDate ? events.filter(e=>e.date===selectedDate) : [];
+  const selectedHomework = selectedDate ? homework.filter(h=>h.dueDate===selectedDate) : [];
+
+  const upcoming = events.filter(e=>e.date>=today).slice(0,8);
+  const upcomingHw = homework.filter(h=>h.dueDate>=today && h.status!=='done')
+    .sort((a,b)=>a.dueDate.localeCompare(b.dueDate)).slice(0,8);
 
   return (
     <motion.div initial={{opacity:0}} animate={{opacity:1}} className="min-h-screen p-6 md:p-8 lg:p-12">
       <div className="max-w-7xl mx-auto space-y-8">
+
         <motion.div initial={{opacity:0,y:-20}} animate={{opacity:1,y:0}} className="flex items-end justify-between gap-4">
-          <div><h1 className="text-4xl md:text-5xl font-light mb-2 text-gray-900 dark:text-white">Calendar</h1>
-            <p className="text-gray-500 dark:text-gray-400">Manage your schedule and important dates</p></div>
+          <div>
+            <h1 className="text-4xl md:text-5xl font-light mb-2 text-gray-900 dark:text-white">Calendar</h1>
+            <p className="text-gray-500 dark:text-gray-400">Manage your schedule and important dates</p>
+          </div>
           <motion.button onClick={()=>setShowModal(true)} whileHover={{scale:1.05}} whileTap={{scale:0.95}}
             className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm flex-shrink-0">
             <Plus className="w-4 h-4"/><span className="hidden sm:inline">Add Event</span>
@@ -46,8 +90,12 @@ export default function CalendarPage() {
 
         {error&&<div className="px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm">{error}</div>}
 
-        {loading?<div className="flex items-center justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-gray-400"/></div>:(
+        {loading ? (
+          <div className="flex items-center justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-gray-400"/></div>
+        ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            {/* ── LEFT: Calendar grid ── */}
             <div className="lg:col-span-2 space-y-4">
               <div className="rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6">
                 <div className="flex items-center justify-between mb-6">
@@ -69,22 +117,39 @@ export default function CalendarPage() {
                   {Array.from({length:daysInMonth}).map((_,i)=>{
                     const d=i+1;
                     const ds=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-                    const dayEvs=eventsForDate(d);const isToday=ds===today;const isSel=ds===selectedDate;
+                    const dayEvs=eventsForDate(d);
+                    const dayHws=homeworkForDate(d);
+                    const isToday=ds===today; const isSel=ds===selectedDate;
+                    const totalDots = dayEvs.length + dayHws.length;
                     return (
                       <motion.button key={d} onClick={()=>setSelectedDate(isSel?null:ds)} whileHover={{scale:1.08}} whileTap={{scale:0.95}}
-                        className={`relative aspect-square rounded-xl p-1 text-sm font-medium transition-all flex flex-col items-center justify-start pt-1 ${isSel?'bg-emerald-600 text-white':isToday?'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300':'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white'}`}>
+                        className={`relative aspect-square rounded-xl p-1 text-sm font-medium transition-all flex flex-col items-center justify-start pt-1 ${
+                          isSel ? 'bg-emerald-600 text-white'
+                          : isToday ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white'
+                        }`}>
                         <span className="text-xs leading-none">{d}</span>
-                        {dayEvs.length>0&&<div className="flex gap-0.5 mt-0.5 flex-wrap justify-center">
-                          {dayEvs.slice(0,3).map((ev,idx)=><div key={idx} className="w-1 h-1 rounded-full" style={{backgroundColor:isSel?'white':ev.color}}/>)}
-                        </div>}
+                        {totalDots > 0 && (
+                          <div className="flex gap-0.5 mt-0.5 flex-wrap justify-center">
+                            {/* event dots (emerald) */}
+                            {dayEvs.slice(0,2).map((ev,idx)=>(
+                              <div key={`ev${idx}`} className="w-1 h-1 rounded-full" style={{backgroundColor:isSel?'rgba(255,255,255,0.8)':ev.color}}/>
+                            ))}
+                            {/* homework dots (orange) */}
+                            {dayHws.slice(0,2).map((hw,idx)=>(
+                              <div key={`hw${idx}`} className="w-1 h-1 rounded-full" style={{backgroundColor:isSel?'rgba(255,255,255,0.6)':'#f97316'}}/>
+                            ))}
+                          </div>
+                        )}
                       </motion.button>
                     );
                   })}
                 </div>
               </div>
 
+              {/* Selected date detail panel */}
               <AnimatePresence>
-                {selectedDate&&(
+                {selectedDate && (
                   <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-10}}
                     className="rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6">
                     <div className="flex items-center justify-between mb-4">
@@ -96,54 +161,149 @@ export default function CalendarPage() {
                         <Plus className="w-3 h-3"/>Add
                       </motion.button>
                     </div>
-                    {selectedEvents.length===0
-                      ?<p className="text-gray-500 dark:text-gray-400 text-sm">No events on this day</p>
-                      :<div className="space-y-2">{selectedEvents.map(ev=><EventRow key={ev.id} event={ev} onDelete={handleDelete}/>)}</div>}
+
+                    {/* Events */}
+                    {selectedEvents.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">Events</p>
+                        <div className="space-y-2">{selectedEvents.map(ev=><EventRow key={ev.id} event={ev} onDelete={handleDelete}/>)}</div>
+                      </div>
+                    )}
+
+                    {/* Homework due */}
+                    {selectedHomework.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">Homework due</p>
+                        <div className="space-y-2">
+                          {selectedHomework.map(hw => (
+                            <div key={hw.id} className="flex items-center gap-3 p-3 rounded-xl bg-orange-50 dark:bg-orange-900/10 border border-orange-100 dark:border-orange-800/30">
+                              <div className="w-2 h-2 rounded-full flex-shrink-0" style={{backgroundColor:hw.color}}/>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{hw.title}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">{hw.subject}</p>
+                              </div>
+                              <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${HW_STATUS_STYLE[hw.status]}`}>
+                                {hw.status.replace('-',' ')}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedEvents.length === 0 && selectedHomework.length === 0 && (
+                      <p className="text-gray-500 dark:text-gray-400 text-sm">No events or homework due on this day</p>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
             </div>
 
+            {/* ── RIGHT: sidebar ── */}
             <div className="space-y-4">
+
+              {/* Sidebar tab switcher */}
               <div className="rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6">
-                <h3 className="font-medium text-gray-900 dark:text-white mb-4">Upcoming</h3>
-                {upcoming.length===0?(
-                  <div className="text-center py-8">
-                    <CalendarDays className="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600"/>
-                    <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">No upcoming events</p>
-                    <motion.button onClick={()=>setShowModal(true)} whileHover={{scale:1.02}} whileTap={{scale:0.98}}
-                      className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium">
-                      <Plus className="w-4 h-4"/>Add Event
-                    </motion.button>
-                  </div>
-                ):(
-                  <div className="space-y-3">
-                    {upcoming.map(ev=>(
-                      <motion.div key={ev.id} whileHover={{x:4}} className="flex items-start gap-3 group">
-                        <div className="w-1 min-h-[40px] rounded-full flex-shrink-0 mt-1" style={{backgroundColor:ev.color}}/>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{ev.title}</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {new Date(ev.date+'T12:00:00').toLocaleDateString('en-AU',{month:'short',day:'numeric'})}
-                            {ev.time&&` · ${ev.time}`}
-                          </p>
-                          <span className={`inline-block text-xs px-2 py-0.5 rounded-full mt-1 ${TYPE_STYLE[ev.type]}`}>{ev.type}</span>
-                        </div>
-                        <motion.button onClick={()=>handleDelete(ev.id)} whileHover={{scale:1.1}} whileTap={{scale:0.9}}
-                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity flex-shrink-0 mt-1">
-                          <Trash2 className="w-4 h-4"/>
-                        </motion.button>
-                      </motion.div>
-                    ))}
-                  </div>
+                <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-700 mb-4">
+                  <button onClick={()=>setSidebarTab('upcoming')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${sidebarTab==='upcoming' ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}>
+                    <CalendarDays className="w-3.5 h-3.5"/>Events
+                  </button>
+                  <button onClick={()=>setSidebarTab('homework')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${sidebarTab==='homework' ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}>
+                    <BookOpen className="w-3.5 h-3.5"/>Homework
+                    {upcomingHw.length > 0 && (
+                      <span className="ml-0.5 bg-orange-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                        {upcomingHw.length > 9 ? '9+' : upcomingHw.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {/* Upcoming events */}
+                {sidebarTab === 'upcoming' && (
+                  upcoming.length === 0 ? (
+                    <div className="text-center py-8">
+                      <CalendarDays className="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600"/>
+                      <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">No upcoming events</p>
+                      <motion.button onClick={()=>setShowModal(true)} whileHover={{scale:1.02}} whileTap={{scale:0.98}}
+                        className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium">
+                        <Plus className="w-4 h-4"/>Add Event
+                      </motion.button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {upcoming.map(ev=>(
+                        <motion.div key={ev.id} whileHover={{x:4}} className="flex items-start gap-3 group">
+                          <div className="w-1 min-h-[40px] rounded-full flex-shrink-0 mt-1" style={{backgroundColor:ev.color}}/>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{ev.title}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {new Date(ev.date+'T12:00:00').toLocaleDateString('en-AU',{month:'short',day:'numeric'})}
+                              {ev.time&&` · ${ev.time}`}
+                            </p>
+                            <span className={`inline-block text-xs px-2 py-0.5 rounded-full mt-1 ${TYPE_STYLE[ev.type]}`}>{ev.type}</span>
+                          </div>
+                          <motion.button onClick={()=>handleDelete(ev.id)} whileHover={{scale:1.1}} whileTap={{scale:0.9}}
+                            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity flex-shrink-0 mt-1">
+                            <Trash2 className="w-4 h-4"/>
+                          </motion.button>
+                        </motion.div>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                {/* Upcoming homework */}
+                {sidebarTab === 'homework' && (
+                  upcomingHw.length === 0 ? (
+                    <div className="text-center py-8">
+                      <BookOpen className="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600"/>
+                      <p className="text-gray-500 dark:text-gray-400 text-sm">No pending homework</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {upcomingHw.map(hw => {
+                        const daysLeft = Math.ceil((new Date(hw.dueDate).setHours(0,0,0,0) - new Date().setHours(0,0,0,0)) / 86400000);
+                        const urgent = daysLeft <= 2;
+                        return (
+                          <motion.div key={hw.id} whileHover={{x:4}} className="flex items-start gap-3">
+                            <div className="w-1 min-h-[40px] rounded-full flex-shrink-0 mt-1" style={{backgroundColor:hw.color}}/>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{hw.title}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">{hw.subject}</p>
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${HW_STATUS_STYLE[hw.status]}`}>
+                                  {hw.status.replace('-',' ')}
+                                </span>
+                                <span className={`text-xs font-medium ${urgent ? 'text-red-500' : 'text-gray-400 dark:text-gray-500'}`}>
+                                  {daysLeft === 0 ? 'Due today' : daysLeft === 1 ? 'Due tomorrow' : `${daysLeft}d left`}
+                                </span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
+                  )
                 )}
               </div>
+
+              {/* Event type legend */}
               <div className="rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6">
-                <h3 className="font-medium text-gray-900 dark:text-white mb-3">Event Types</h3>
+                <h3 className="font-medium text-gray-900 dark:text-white mb-3">Legend</h3>
                 <div className="space-y-2">
-                  {EVENT_TYPES.map(t=><div key={t} className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_STYLE[t]}`}>{t}</span>
-                  </div>)}
+                  {EVENT_TYPES.map(t=>(
+                    <div key={t} className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_STYLE[t]}`}>{t}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-orange-500"/>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">homework due</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
