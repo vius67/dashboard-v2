@@ -39,21 +39,12 @@ function getIsoWeek(date: Date): number {
 function getWeekType(isoWeek: number): 'A' | 'B' { return isoWeek % 2 === 1 ? 'A' : 'B'; }
 function getCurrentWeekType(): 'A' | 'B' { return getWeekType(getIsoWeek(new Date())); }
 
-// ── ICS PARSER ───────────────────────────────────────────────────────
-// Parses BOTH Week A and Week B into separate maps, keyed by (day|subject|startTime)
-// Returns { weekA: ClassPeriod[], weekB: ClassPeriod[] }
-function parseIcsToWeeks(text: string): { weekA: ClassPeriod[]; weekB: ClassPeriod[] } {
+
+// Parse a single ICS file into deduplicated classes
+function parseIcsToClasses(text: string): ClassPeriod[] {
   const blocks = text.split('BEGIN:VEVENT').slice(1);
-
-  interface RawEvent {
-    summary: string; cleanSubject: string; teacher: string; room: string;
-    dayOfWeek: number; startTime: string; endTime: string; color: string;
-    isoWeek: number; weekType: 'A' | 'B';
-  }
-
-  const rawEvents: RawEvent[] = [];
+  const seen = new Map<string, ClassPeriod>();
   let colorIndex = 0;
-
   for (const block of blocks) {
     const get = (key: string) => {
       const m = block.match(new RegExp(`(?:^|\\r?\\n)${key}[^:]*:([^\\r\\n]+)`));
@@ -66,59 +57,35 @@ function parseIcsToWeeks(text: string): { weekA: ClassPeriod[]; weekB: ClassPeri
     const desc     = get('DESCRIPTION');
     if (!summary || !dtstart) continue;
     if (SKIP_KEYWORDS.some(kw => summary.toUpperCase().includes(kw))) continue;
-
     let teacher = '';
     const tm = desc.replace(/\\n/g, '\n').match(/Teacher:\s*([^\n]+)/);
     if (tm) teacher = tm[1].trim();
-
     const parseUtc = (s: string) => {
       const c = s.replace('Z','');
       return new Date(Date.UTC(+c.slice(0,4),+c.slice(4,6)-1,+c.slice(6,8),+c.slice(9,11),+c.slice(11,13),0));
     };
     const utcStart = parseUtc(dtstart);
-    const utcEnd   = parseUtc(dtend);
+    const utcEnd   = parseUtc(dtend || dtstart);
     const offsetMs = 11 * 60 * 60 * 1000;
     const localStart = new Date(utcStart.getTime() + offsetMs);
     const localEnd   = new Date(utcEnd.getTime()   + offsetMs);
     const dayOfWeek  = localStart.getUTCDay();
     if (dayOfWeek === 0 || dayOfWeek === 6) continue;
-
     const startTime = `${pad2(localStart.getUTCHours())}:${pad2(localStart.getUTCMinutes())}`;
     const endTime   = `${pad2(localEnd.getUTCHours())}:${pad2(localEnd.getUTCMinutes())}`;
-    const eventIsoWeek = getIsoWeek(utcStart);
-    const eventWeekType = getWeekType(eventIsoWeek);
     const cleanSubject = summary.replace(/^10\w+:\s*/, '').trim();
-
-    rawEvents.push({
-      summary, cleanSubject, teacher, room: location, dayOfWeek, startTime, endTime,
-      color: getSubjectColor(summary, colorIndex++), isoWeek: eventIsoWeek, weekType: eventWeekType,
-    });
-  }
-
-  // Build per-week maps: for each week type, dedup by (day|subject|startTime)
-  const buildWeek = (weekType: 'A' | 'B'): ClassPeriod[] => {
-    const seen = new Map<string, ClassPeriod>();
-    for (const e of rawEvents) {
-      if (e.weekType !== weekType) continue;
-      const key = `${e.dayOfWeek}|${e.cleanSubject}|${e.startTime}`;
-      if (!seen.has(key)) {
-        seen.set(key, {
-          id: genId(), subject: e.cleanSubject, teacher: e.teacher, room: e.room,
-          dayOfWeek: e.dayOfWeek, startTime: e.startTime, endTime: e.endTime, color: e.color,
-        });
-      }
+    const key = `${dayOfWeek}|${cleanSubject}|${startTime}`;
+    if (!seen.has(key)) {
+      seen.set(key, {
+        id: genId(), subject: cleanSubject, teacher, room: location,
+        dayOfWeek, startTime, endTime,
+        color: getSubjectColor(summary, colorIndex++),
+      });
     }
-    return Array.from(seen.values()).sort((a,b) => a.dayOfWeek - b.dayOfWeek || parseTime(a.startTime) - parseTime(b.startTime));
-  };
-
-  return { weekA: buildWeek('A'), weekB: buildWeek('B') };
+  }
+  return Array.from(seen.values()).sort((a,b) => a.dayOfWeek - b.dayOfWeek || parseTime(a.startTime) - parseTime(b.startTime));
 }
 
-// Legacy single-week parse (for replaceAll — uses current week)
-function parseIcsToClasses(text: string): ClassPeriod[] {
-  const { weekA, weekB } = parseIcsToWeeks(text);
-  return getCurrentWeekType() === 'A' ? weekA : weekB;
-}
 
 // ── Weekend countdown helpers ─────────────────────────────────────────
 function getWeekendCountdown(): { daysUntilMon: number; nextMonday: Date } {
@@ -375,7 +342,7 @@ export default function Dashboard() {
         </motion.div>
 
         {/* ── DAY SCHEDULE ── */}
-        {!loading && !isWeekend && timetable.length > 0 && (
+        {!loading && timetable.length > 0 && (
           <div>
             <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
               {[1,2,3,4,5].map(d => {
@@ -563,17 +530,15 @@ export default function Dashboard() {
             onSave={async cls => { await timetableService.upsert(cls); await load(); setModal('none'); setViewDay(cls.dayOfWeek); }} />
         )}
         {modal === 'ics' && (
-          <IcsModal dark={darkMode} onClose={() => setModal('none')} currentWeek={weekType}
+          <IcsModal dark={darkMode} onClose={() => setModal('none')}
             onImport={async (weekA, weekB) => {
               // Save current week to Supabase
               const toSave = weekType === 'A' ? weekA : weekB;
               await timetableService.replaceAll(toSave);
-              // Cache the other week in localStorage
-              const other = weekType === 'A' ? weekB : weekA;
+              // Cache other week in localStorage
               localStorage.setItem('weekB-timetable', JSON.stringify(weekType === 'A' ? weekB : weekA));
-              // Update state
               setTimetable(toSave);
-              setWeekBTimetable(other);
+              setWeekBTimetable(weekType === 'A' ? weekB : weekA);
               await load();
               setModal('none');
               const d = new Date().getDay();
@@ -683,36 +648,46 @@ function ClassModal({ dark, existing, onClose, onSave }: {
 }
 
 // ── ICS MODAL ─────────────────────────────────────────────────────────
-function IcsModal({ dark, onClose, onImport, currentWeek }: {
+// ── ICS MODAL (two separate files: Week A + Week B) ──────────────────
+function IcsModal({ dark, onClose, onImport }: {
   dark: boolean; onClose: () => void;
   onImport: (weekA: ClassPeriod[], weekB: ClassPeriod[]) => Promise<void>;
-  currentWeek: 'A' | 'B';
 }) {
-  const [text,   setText]   = useState('');
+  const [textA,  setTextA]  = useState('');
+  const [textB,  setTextB]  = useState('');
   const [saving, setSaving] = useState(false);
   const [err,    setErr]    = useState('');
-  const [preview, setPreview] = useState<{ weekA: number; weekB: number } | null>(null);
+
+  const parseOne = (text: string, label: string): ClassPeriod[] | null => {
+    if (!text.trim()) { setErr(`Paste your Week ${label} .ics data`); return null; }
+    if (!text.includes('BEGIN:VCALENDAR')) { setErr(`Week ${label}: doesn't look like valid ICS data`); return null; }
+    const parsed = parseIcsToClasses(text);
+    if (!parsed.length) { setErr(`Week ${label}: no weekday classes found`); return null; }
+    return parsed;
+  };
 
   const doImport = async () => {
     setErr('');
-    if (!text.trim()) { setErr('Paste your .ics data first'); return; }
-    if (!text.includes('BEGIN:VCALENDAR')) { setErr("Doesn't look like valid ICS data — copy the full file contents."); return; }
-    const { weekA, weekB } = parseIcsToWeeks(text);
-    if (!weekA.length && !weekB.length) { setErr('No weekday classes found. Make sure you paste the full .ics file.'); return; }
+    const weekA = parseOne(textA, 'A');
+    if (!weekA) return;
+    const weekB = parseOne(textB, 'B');
+    if (!weekB) return;
     setSaving(true);
     try { await onImport(weekA, weekB); }
     catch (e: any) { setErr(e.message); setSaving(false); }
   };
 
-  const handlePreview = () => {
-    if (!text.trim() || !text.includes('BEGIN:VCALENDAR')) return;
-    const { weekA, weekB } = parseIcsToWeeks(text);
-    setPreview({ weekA: weekA.length, weekB: weekB.length });
-  };
-
   const bg  = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
   const inp = dark ? 'bg-white/8 border-white/10 text-white placeholder-gray-600 focus:border-emerald-500/50'
                    : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-emerald-400';
+
+  const countClasses = (text: string) => {
+    if (!text.includes('BEGIN:VCALENDAR')) return null;
+    return parseIcsToClasses(text).length;
+  };
+
+  const countA = textA ? countClasses(textA) : null;
+  const countB = textB ? countClasses(textB) : null;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -722,50 +697,61 @@ function IcsModal({ dark, onClose, onImport, currentWeek }: {
         transition={{ type: 'spring', stiffness: 320, damping: 28 }}
         className={`w-full max-w-lg rounded-3xl border p-6 shadow-2xl ${bg}`}>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import calendar (.ics)</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import timetable</h2>
           <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors"><X className="w-4 h-4" /></button>
         </div>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-1 leading-relaxed">
-          Export from Sentral as <strong className="font-semibold text-gray-700 dark:text-gray-300">.ics</strong>, open in a text editor, copy everything, paste below.
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+          Export each week from Sentral as a separate <strong className="font-semibold text-gray-700 dark:text-gray-300">.ics</strong> file, open in a text editor, and paste each below.
         </p>
-        <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-4">
-          ✓ Both Week A and Week B are detected automatically — no need to import twice
-        </p>
-        <textarea value={text} onChange={e => { setText(e.target.value); setPreview(null); }} rows={8}
-          placeholder={"BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n..."}
-          className={`w-full px-4 py-3 rounded-2xl border text-xs font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`} />
 
-        {preview && (
-          <div className="flex gap-3 mt-3">
-            <div className={`flex-1 py-2 px-3 rounded-xl text-center border ${dark ? 'bg-blue-500/10 border-blue-400/20' : 'bg-blue-50 border-blue-200'}`}>
-              <p className={`text-sm font-bold ${dark ? 'text-blue-300' : 'text-blue-700'}`}>{preview.weekA}</p>
-              <p className={`text-xs ${dark ? 'text-blue-400' : 'text-blue-600'}`}>Week A classes</p>
-            </div>
-            <div className={`flex-1 py-2 px-3 rounded-xl text-center border ${dark ? 'bg-purple-500/10 border-purple-400/20' : 'bg-purple-50 border-purple-200'}`}>
-              <p className={`text-sm font-bold ${dark ? 'text-purple-300' : 'text-purple-700'}`}>{preview.weekB}</p>
-              <p className={`text-xs ${dark ? 'text-purple-400' : 'text-purple-600'}`}>Week B classes</p>
-            </div>
+        {/* Week A */}
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className={`text-xs font-bold uppercase tracking-wider ${dark ? 'text-blue-300' : 'text-blue-700'}`}>Week A</label>
+            {countA !== null && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dark ? 'bg-blue-500/15 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
+                {countA} classes
+              </span>
+            )}
           </div>
-        )}
+          <textarea value={textA} onChange={e => setTextA(e.target.value)} rows={4}
+            placeholder={"BEGIN:VCALENDAR
+VERSION:2.0
+..."}
+            className={`w-full px-4 py-3 rounded-2xl border text-xs font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-colors ${inp}`} />
+        </div>
 
-        {err && <p className="text-sm text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mt-3">{err}</p>}
-        <div className="flex gap-2.5 mt-4">
+        {/* Week B */}
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className={`text-xs font-bold uppercase tracking-wider ${dark ? 'text-purple-300' : 'text-purple-700'}`}>Week B</label>
+            {countB !== null && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dark ? 'bg-purple-500/15 text-purple-300' : 'bg-purple-50 text-purple-700'}`}>
+                {countB} classes
+              </span>
+            )}
+          </div>
+          <textarea value={textB} onChange={e => setTextB(e.target.value)} rows={4}
+            placeholder={"BEGIN:VCALENDAR
+VERSION:2.0
+..."}
+            className={`w-full px-4 py-3 rounded-2xl border text-xs font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/30 transition-colors ${inp}`} />
+        </div>
+
+        {err && <p className="text-sm text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mb-3">{err}</p>}
+        <div className="flex gap-2.5">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl border border-gray-200 dark:border-white/10 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">Cancel</button>
-          {!preview && (
-            <button onClick={handlePreview} className={`py-2.5 px-4 rounded-2xl border text-sm font-medium transition-colors ${dark ? 'border-white/10 text-gray-300 hover:bg-white/5' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-              Preview
-            </button>
-          )}
-          <motion.button onClick={doImport} disabled={saving} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
-            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+          <motion.button onClick={doImport} disabled={saving || !textA.trim() || !textB.trim()} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
+            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
             {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {saving ? 'Importing…' : 'Import both weeks'}
+            {saving ? 'Importing…' : 'Import Week A + B'}
           </motion.button>
         </div>
       </motion.div>
     </motion.div>
   );
 }
+
 
 function Inp({ label, value, onChange, placeholder, type = 'text', inp }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; inp: string;
