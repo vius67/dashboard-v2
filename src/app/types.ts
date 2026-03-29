@@ -7,6 +7,7 @@ export interface ClassPeriod {
   endTime: string;
   dayOfWeek: number;
   color: string;
+  week?: 'A' | 'B';
 }
 
 export interface Homework {
