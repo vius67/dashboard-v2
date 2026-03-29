@@ -62,7 +62,13 @@ function parseIcsToClasses(text: string): ClassPeriod[] {
     const summary  = get('SUMMARY');
     const dtstart  = get('DTSTART');
     const dtend    = get('DTEND');
-    const location = get('LOCATION').replace(/^Room:\s*/i, '').trim();
+    const locationRaw = get('LOCATION');
+    // Strip "LOCATION:" prefix if it leaked, strip "Room: " prefix, clean up
+    const location = locationRaw
+      .replace(/^LOCATION[;:][^:]*:/i, '')
+      .replace(/^Room:\s*/i, '')
+      .replace(/^LOCATION:/i, '')
+      .trim();
     const desc     = get('DESCRIPTION');
 
     if (!summary || !dtstart) continue;
@@ -101,10 +107,12 @@ function parseIcsToClasses(text: string): ClassPeriod[] {
     const startTime = `${pad2(localStart.getUTCHours())}:${pad2(localStart.getUTCMinutes())}`;
     const endTime   = `${pad2(localEnd.getUTCHours())}:${pad2(localEnd.getUTCMinutes())}`;
 
-    // Clean subject — strip "10XX: " prefix OR " YrNN" suffix
+    // Clean subject — strip code prefix, SUMMARY: leakage, YrNN suffix
     const cleanSubject = summary
-      .replace(/^10\w+:\s*/, '')   // old Sentral format: "10Maths: Mathematics"
-      .replace(/\s+Yr\d+$/i, '')   // new format: "Mathematics Yr10" → "Mathematics"
+      .replace(/^SUMMARY[;:][^:]*:/i, '')  // strip leaked "SUMMARY:" prefix
+      .replace(/^10\w+:\s*/, '')           // "10MATE: Mathematics" → "Mathematics"
+      .replace(/\s+Yr\d+$/i, '')           // "Mathematics Yr10" → "Mathematics"
+      .replace(/\s+Year\d+$/i, '')         // "Mathematics Year10" → "Mathematics"
       .trim();
 
     const key = `${dayOfWeek}|${cleanSubject}|${startTime}`;
@@ -550,8 +558,7 @@ export default function Dashboard() {
                                     className={`rounded-xl p-2 border text-left transition-all ${card}`}
                                     style={{ borderLeftColor: cls.color, borderLeftWidth: '3px' }}>
                                     <p className="text-[11px] font-semibold text-gray-900 dark:text-white leading-tight truncate">{cls.subject}</p>
-                                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 tabular-nums">{cls.startTime}</p>
-                                    {cls.room && <p className="text-[10px] text-gray-400 dark:text-gray-600 truncate">{cls.room}</p>}
+                                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 tabular-nums">{cls.startTime}–{cls.endTime}</p>
                                   </div>
                                 ))
                               )}
