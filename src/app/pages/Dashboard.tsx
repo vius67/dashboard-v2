@@ -54,8 +54,9 @@ function parseIcsToClasses(text: string): ClassPeriod[] {
       const regex = new RegExp(`(?:^|\n)${key}(?:;[^:]*)?:([^\n]*)(\n[ \t][^\n]*)*`, 'i');
       const m = block.match(regex);
       if (!m) return '';
-      // Unfold continuation lines
-      let val = m[0].replace(/\n[ \t]/g, '').replace(new RegExp(`^${key}(?:;[^:]*)?:`, 'i'), '');
+      // Unfold continuation lines, then strip the leading \n + key name
+      // NOTE: m[0] starts with \n (from the (?:^|\n) group), so use \n? before the key
+      let val = m[0].replace(/\n[ \t]/g, '').replace(new RegExp(`^\\n?${key}(?:;[^:]*)?:`, 'i'), '');
       return val.trim();
     };
 
