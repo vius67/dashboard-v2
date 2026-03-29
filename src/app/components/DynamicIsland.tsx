@@ -132,7 +132,7 @@ export default function DynamicIsland() {
 
   return (
     // ── FIX: moved down from top-4 to top-16 to clear header buttons ──
-    <div className="fixed top-16 right-4 z-50 flex flex-col items-end gap-2">
+    <div className="fixed top-4 right-4 z-50 flex flex-col items-end gap-2">
       <motion.div
         layout
         onClick={() => setExpanded(v => !v)}
