@@ -10,18 +10,32 @@ import DynamicIsland from './DynamicIsland';
 import { useKeyboardShortcuts, KeyboardShortcutsModal, ShortcutHint } from './KeyboardShortcuts';
 
 const navItems = [
-  { path: '/dashboard',  icon: LayoutDashboard, label: 'Dashboard' },
-  { path: '/homework',   icon: BookOpen,         label: 'Homework' },
-  { path: '/past-papers',icon: FileText,         label: 'Past Papers' },
-  { path: '/todo',       icon: CheckSquare,      label: 'To-Do' },
-  { path: '/calendar',   icon: CalendarDays,     label: 'Calendar' },
-  { path: '/study',      icon: Timer,            label: 'Study Timer' },
+  { path: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/homework',    icon: BookOpen,         label: 'Homework' },
+  { path: '/past-papers', icon: FileText,         label: 'Past Papers' },
+  { path: '/todo',        icon: CheckSquare,      label: 'To-Do' },
+  { path: '/calendar',    icon: CalendarDays,     label: 'Calendar' },
+  { path: '/study',       icon: Timer,            label: 'Study Timer' },
 ];
 
 function AnimatedBackground({ darkMode }: { darkMode: boolean }) {
   return (
     <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+      {/* Base colour */}
       <div className={`absolute inset-0 transition-colors duration-700 ${darkMode ? 'bg-gray-950' : 'bg-gradient-to-br from-emerald-50 via-white to-green-50'}`} />
+
+      {/* Subtle grid — same as auth page */}
+      <div
+        className={`absolute inset-0 ${darkMode ? 'opacity-[0.03]' : 'opacity-[0.04]'}`}
+        style={{
+          backgroundImage: darkMode
+            ? 'linear-gradient(rgba(16,185,129,1) 1px, transparent 1px), linear-gradient(90deg, rgba(16,185,129,1) 1px, transparent 1px)'
+            : 'linear-gradient(rgba(16,185,129,0.6) 1px, transparent 1px), linear-gradient(90deg, rgba(16,185,129,0.6) 1px, transparent 1px)',
+          backgroundSize: '60px 60px',
+        }}
+      />
+
+      {/* Moving orbs */}
       <motion.div animate={{ x:[0,60,-30,0], y:[0,-80,40,0], scale:[1,1.2,0.9,1] }}
         transition={{ duration:18, repeat:Infinity, ease:'easeInOut' }}
         className={`absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full blur-3xl opacity-30 ${darkMode?'bg-emerald-900':'bg-emerald-200'}`}/>
@@ -46,10 +60,8 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
 
   const handleSignOut = async () => { await signOut(); navigate('/'); };
 
-  // Keyboard shortcut callbacks
   const onNavigate = useCallback((path: string) => navigate(path), [navigate]);
   const onNewItem = useCallback(() => {
-    // dispatch a custom event pages can listen to
     window.dispatchEvent(new CustomEvent('dashboard:new-item'));
   }, []);
   const onImport = useCallback(() => {
@@ -158,7 +170,6 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
                   )}
                   <Icon className="w-4 h-4" />
                   <span>{item.label}</span>
-                  {/* Timer indicator dot */}
                   {isTimer && timer.isRunning && (
                     <div className={`ml-auto w-2 h-2 rounded-full ${timer.isPaused ? 'bg-yellow-400' : 'bg-emerald-400 animate-pulse'}`} />
                   )}
@@ -167,7 +178,6 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
             );
           })}
         </div>
-        {/* User email at bottom */}
         {user?.email && (
           <div className={`text-[10px] font-mono truncate px-4 pb-2 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`}>
             {user.email}
@@ -175,7 +185,6 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
         )}
       </motion.nav>
 
-      {/* Keyboard shortcuts */}
       <ShortcutHint />
       <KeyboardShortcutsModal show={showHelp} onClose={() => setShowHelp(false)} />
     </div>
