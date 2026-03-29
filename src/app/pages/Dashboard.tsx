@@ -342,7 +342,7 @@ export default function Dashboard() {
                   <DigitBlock value={pad2(weekendCountdown.seconds)} label="sec" dark={darkMode} />
                 </div>
                 <p className="text-xl font-light text-gray-900 dark:text-white mb-2">
-                  {dayOfWeek === 6 ? "It's Saturday — enjoy the weekend!" : "It's Sunday — almost there!"}
+                  {dayOfWeek === 6 ? "time to start the weekend!" : "It's Sunday haha, your almost there!"}
                 </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   {weekType === 'A' ? `Monday starts Week A` : `Monday starts Week B`}
