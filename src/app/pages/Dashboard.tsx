@@ -577,8 +577,7 @@ export default function Dashboard() {
         )}
         {modal === 'ics' && (
           <IcsModal dark={darkMode} onClose={() => setModal('none')}
-            onImport={async (weekA, weekB) => {
-              await timetableService.replaceBothWeeks(weekA, weekB);
+            onDone={async () => {
               await load();
               setModal('none');
               const d = new Date().getDay();
@@ -691,15 +690,25 @@ function ClassModal({ dark, existing, onClose, onSave }: {
   );
 }
 
-// ── ICS MODAL ─────────────────────────────────────────────────────────
-function IcsModal({ dark, onClose, onImport }: {
-  dark: boolean; onClose: () => void;
-  onImport: (weekA: ClassPeriod[], weekB: ClassPeriod[]) => Promise<void>;
+// ── ICS MODAL — step-by-step: Week A then Week B ─────────────────────
+function IcsModal({ dark, onClose, onDone }: {
+  dark: boolean;
+  onClose: () => void;
+  onDone: () => void;
 }) {
-  const [weekA, setWeekA] = React.useState<ClassPeriod[] | null>(null);
-  const [weekB, setWeekB] = React.useState<ClassPeriod[] | null>(null);
-  const [saving, setSaving] = React.useState(false);
+  // step: 'A' = waiting for Week A file
+  //       'A-saving' = saving Week A to Supabase
+  //       'B' = Week A saved, waiting for Week B file
+  //       'B-saving' = saving Week B to Supabase
+  //       'done' = both saved
+  type Step = 'A' | 'A-saving' | 'B' | 'B-saving' | 'done';
+  const [step, setStep] = React.useState<Step>('A');
+  const [weekACount, setWeekACount] = React.useState(0);
+  const [weekBCount, setWeekBCount] = React.useState(0);
   const [err, setErr] = React.useState('');
+
+  const bg = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
+  const subtle = dark ? 'text-gray-500' : 'text-gray-400';
 
   const readFile = (file: File): Promise<string> =>
     new Promise((res, rej) => {
@@ -709,106 +718,178 @@ function IcsModal({ dark, onClose, onImport }: {
       r.readAsText(file);
     });
 
-  const handleFile = async (file: File, week: 'A' | 'B') => {
+  const handleWeekA = async (file: File) => {
     setErr('');
+    setStep('A-saving');
     try {
       const text = await readFile(file);
-      if (!text.includes('BEGIN:VCALENDAR')) {
-        setErr(`Week ${week}: not a valid ICS file`);
-        return;
-      }
+      if (!text.includes('BEGIN:VCALENDAR')) throw new Error('Not a valid ICS file — make sure you exported from Sentral');
       const parsed = parseIcsToClasses(text);
-      if (!parsed.length) {
-        setErr(`Week ${week}: no weekday classes found — check the file exported correctly`);
-        return;
-      }
-      if (week === 'A') setWeekA(parsed); else setWeekB(parsed);
+      if (!parsed.length) throw new Error('No weekday classes found in this file');
+
+      // Save Week A immediately to Supabase
+      const userId = await import('../../lib/db').then(m => m.timetableService.getAll()).then(() => null).catch(() => null);
+      await import('../../lib/db').then(m => m.timetableService.replaceWeek(parsed, 'A'));
+
+      setWeekACount(parsed.length);
+      setStep('B');
     } catch (e: any) {
-      setErr(`Week ${week} error: ${e.message}`);
+      setErr(e.message);
+      setStep('A');
     }
   };
 
-  const doImport = async () => {
+  const handleWeekB = async (file: File) => {
     setErr('');
-    if (!weekA) { setErr('Please upload Week A first'); return; }
-    if (!weekB) { setErr('Please upload Week B first'); return; }
-    setSaving(true);
+    setStep('B-saving');
     try {
-      await onImport(weekA, weekB);
+      const text = await readFile(file);
+      if (!text.includes('BEGIN:VCALENDAR')) throw new Error('Not a valid ICS file — make sure you exported from Sentral');
+      const parsed = parseIcsToClasses(text);
+      if (!parsed.length) throw new Error('No weekday classes found in this file');
+
+      // Save Week B immediately to Supabase
+      await import('../../lib/db').then(m => m.timetableService.replaceWeek(parsed, 'B'));
+
+      setWeekBCount(parsed.length);
+      setStep('done');
     } catch (e: any) {
-      setErr(`Import failed: ${e.message}`);
-      setSaving(false);
+      setErr(e.message);
+      setStep('B');
     }
   };
 
-  const bg = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
-
-  const UploadZone = ({ week, data }: { week: 'A' | 'B'; data: ClassPeriod[] | null }) => (
-    <label className={`relative block w-full rounded-2xl border-2 border-dashed p-6 text-center cursor-pointer transition-all ${
-      data
-        ? week === 'A'
-          ? 'border-blue-400/50 bg-blue-500/5'
-          : 'border-purple-400/50 bg-purple-500/5'
-        : dark ? 'border-white/10 hover:border-white/20' : 'border-gray-200 hover:border-gray-300'
-    }`}>
-      <input
-        type="file"
-        accept=".ics"
-        className="sr-only"
-        onChange={e => {
-          const f = e.target.files?.[0];
-          if (f) handleFile(f, week);
-          // Reset after a tick so the same file can be re-selected
-          setTimeout(() => { e.target.value = ''; }, 100);
-        }}
-      />
-      {data ? (
-        <>
-          <div className={`text-2xl font-mono font-light mb-1 ${week === 'A' ? 'text-blue-500' : 'text-purple-500'}`}>{data.length}</div>
-          <div className={`text-xs font-mono ${week === 'A' ? 'text-blue-500 dark:text-blue-400' : 'text-purple-500 dark:text-purple-400'}`}>classes found</div>
-          <div className="text-[10px] text-gray-400 dark:text-gray-600 mt-1 font-mono">click to replace</div>
-        </>
-      ) : (
-        <>
-          <Upload className={`w-6 h-6 mx-auto mb-2 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
-          <div className={`text-xs font-mono font-medium ${week === 'A' ? 'text-blue-500 dark:text-blue-400' : 'text-purple-500 dark:text-purple-400'}`}>
-            Week {week}
-          </div>
-          <div className={`text-[10px] font-mono mt-0.5 ${dark ? 'text-gray-600' : 'text-gray-400'}`}>drop .ics or click</div>
-        </>
-      )}
-    </label>
-  );
+  const isSaving = step === 'A-saving' || step === 'B-saving';
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
-      onClick={e => e.target === e.currentTarget && onClose()}>
+      onClick={e => e.target === e.currentTarget && !isSaving && onClose()}>
       <motion.div initial={{ scale: 0.96, opacity: 0, y: 12 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 12 }}
         transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-        className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl ${bg}`}>
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold font-mono text-gray-900 dark:text-white">import timetable</h2>
-          <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors"><X className="w-4 h-4" /></button>
-        </div>
-        <p className="text-xs font-mono text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
-          export each week from sentral as a separate <strong className="text-gray-700 dark:text-gray-300">.ics</strong> file and upload below.
-        </p>
+        className={`w-full max-w-sm rounded-3xl border p-6 shadow-2xl ${bg}`}>
 
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <UploadZone week="A" data={weekA} />
-          <UploadZone week="B" data={weekB} />
+        {/* Header */}
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-base font-semibold font-mono text-gray-900 dark:text-white">import timetable</h2>
+          {!isSaving && step !== 'done' && (
+            <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
-        {err && <p className="text-xs font-mono text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mb-3">{err}</p>}
-        <div className="flex gap-2.5">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl border border-gray-200 dark:border-white/10 text-sm font-mono font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">cancel</button>
-          <motion.button onClick={doImport} disabled={saving || !weekA || !weekB} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
-            className="flex-1 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-mono font-medium text-white transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
-            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {saving ? 'importing…' : 'import both weeks'}
-          </motion.button>
+        {/* Step indicators */}
+        <div className="flex items-center gap-2 mb-5 mt-3">
+          {(['A', 'B'] as const).map((w, i) => {
+            const done = w === 'A' ? (step === 'B' || step === 'B-saving' || step === 'done') : step === 'done';
+            const active = w === 'A' ? (step === 'A' || step === 'A-saving') : (step === 'B' || step === 'B-saving');
+            return (
+              <React.Fragment key={w}>
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold border transition-all ${
+                  done ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-600 dark:text-emerald-400'
+                  : active ? w === 'A' ? 'bg-blue-500/15 border-blue-400/30 text-blue-600 dark:text-blue-400'
+                                       : 'bg-purple-500/15 border-purple-400/30 text-purple-600 dark:text-purple-400'
+                  : dark ? 'bg-white/5 border-white/10 text-gray-600' : 'bg-gray-50 border-gray-200 text-gray-400'
+                }`}>
+                  {done ? '✓' : `${i + 1}`} Week {w}
+                </div>
+                {i === 0 && <div className={`flex-1 h-px ${dark ? 'bg-white/10' : 'bg-gray-200'}`} />}
+              </React.Fragment>
+            );
+          })}
         </div>
+
+        {/* Content per step */}
+        <AnimatePresence mode="wait">
+          {(step === 'A' || step === 'A-saving') && (
+            <motion.div key="stepA" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
+              <p className={`text-xs font-mono mb-4 ${subtle}`}>
+                Export <strong className="text-gray-700 dark:text-gray-300">Week A</strong> from Sentral as an .ics file, then upload it here.
+              </p>
+              <label className={`relative block w-full rounded-2xl border-2 border-dashed p-8 text-center cursor-pointer transition-all ${
+                step === 'A-saving' ? 'border-blue-400/50 bg-blue-500/5 cursor-not-allowed'
+                : dark ? 'border-white/15 hover:border-blue-400/40 hover:bg-blue-500/5' : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/40'
+              }`}>
+                <input type="file" accept=".ics" className="sr-only" disabled={step === 'A-saving'}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleWeekA(f); }} />
+                {step === 'A-saving' ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
+                    <span className="text-xs font-mono text-blue-500">saving week A…</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <Upload className={`w-7 h-7 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
+                    <span className="text-xs font-mono text-blue-500 dark:text-blue-400 font-medium">click to upload Week A .ics</span>
+                    <span className={`text-[10px] font-mono ${subtle}`}>or drag and drop</span>
+                  </div>
+                )}
+              </label>
+            </motion.div>
+          )}
+
+          {(step === 'B' || step === 'B-saving') && (
+            <motion.div key="stepB" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-xl mb-4 ${dark ? 'bg-emerald-500/10 border border-emerald-400/20' : 'bg-emerald-50 border border-emerald-200/60'}`}>
+                <span className="text-emerald-500 text-sm">✓</span>
+                <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">Week A saved — {weekACount} classes</span>
+              </div>
+              <p className={`text-xs font-mono mb-4 ${subtle}`}>
+                Now upload <strong className="text-gray-700 dark:text-gray-300">Week B</strong> from Sentral.
+              </p>
+              <label className={`relative block w-full rounded-2xl border-2 border-dashed p-8 text-center cursor-pointer transition-all ${
+                step === 'B-saving' ? 'border-purple-400/50 bg-purple-500/5 cursor-not-allowed'
+                : dark ? 'border-white/15 hover:border-purple-400/40 hover:bg-purple-500/5' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50/40'
+              }`}>
+                <input type="file" accept=".ics" className="sr-only" disabled={step === 'B-saving'}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleWeekB(f); }} />
+                {step === 'B-saving' ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="w-7 h-7 animate-spin text-purple-500" />
+                    <span className="text-xs font-mono text-purple-500">saving week B…</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <Upload className={`w-7 h-7 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
+                    <span className="text-xs font-mono text-purple-500 dark:text-purple-400 font-medium">click to upload Week B .ics</span>
+                    <span className={`text-[10px] font-mono ${subtle}`}>or drag and drop</span>
+                  </div>
+                )}
+              </label>
+            </motion.div>
+          )}
+
+          {step === 'done' && (
+            <motion.div key="done" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-4">
+              <div className="text-4xl mb-3">🎉</div>
+              <p className="font-semibold text-gray-900 dark:text-white mb-1">Timetable imported!</p>
+              <p className={`text-xs font-mono ${subtle} mb-5`}>
+                Week A: {weekACount} classes · Week B: {weekBCount} classes
+              </p>
+              <motion.button onClick={onDone} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                className="w-full py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-mono font-medium text-white transition-colors">
+                done
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Error */}
+        {err && (
+          <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+            className="text-xs font-mono text-red-500 bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20 mt-3">
+            {err}
+          </motion.p>
+        )}
+
+        {/* Cancel button (only when not saving and not done) */}
+        {step !== 'done' && !isSaving && (
+          <button onClick={onClose}
+            className={`w-full mt-3 py-2 rounded-2xl text-xs font-mono transition-colors ${dark ? 'text-gray-600 hover:text-gray-400' : 'text-gray-400 hover:text-gray-600'}`}>
+            cancel
+          </button>
+        )}
       </motion.div>
     </motion.div>
   );
