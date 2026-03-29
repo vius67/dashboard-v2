@@ -20,9 +20,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // ── FIX: default to true (dark mode on) if no preference saved ──
   const [darkMode, setDarkMode] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(DARK_MODE_KEY) ?? 'false'); }
-    catch { return false; }
+    try {
+      const stored = localStorage.getItem(DARK_MODE_KEY);
+      // If never set before, default to dark
+      return stored === null ? true : JSON.parse(stored);
+    } catch { return true; }
   });
 
   useEffect(() => {
