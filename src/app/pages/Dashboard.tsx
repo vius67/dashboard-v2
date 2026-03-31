@@ -37,7 +37,7 @@ function getIsoWeek(date: Date): number {
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
-function getWeekType(isoWeek: number): 'A' | 'B' { return isoWeek % 2 === 1 ? 'A' : 'B'; }
+function getWeekType(isoWeek: number): 'A' | 'B' { return isoWeek % 2 === 0 ? 'A' : 'B'; }
 function getCurrentWeekType(): 'A' | 'B' { return getWeekType(getIsoWeek(new Date())); }
 
 // ── ICS Parser ──────────────────────────────────────────────────────
