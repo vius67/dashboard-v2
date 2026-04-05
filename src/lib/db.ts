@@ -305,6 +305,75 @@ export const pastPaperService = {
   },
 };
 
+// ─── Study Logs ──────────────────────────────────────────────────
+export interface StudyLogRow {
+  id: string;
+  label: string;
+  subject: string;
+  duration: number;
+  mode: 'focus' | 'break';
+  mood: 'great' | 'good' | 'okay' | 'bad' | null;
+  notes: string;
+  created_at: string;
+}
+
+export const studyLogService = {
+  async getAll(): Promise<StudyLogRow[]> {
+    const userId = await getUserId();
+    const { data, error } = await supabase
+      .from('study_logs')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw new Error(`Failed to load study logs: ${error.message}`);
+    return (data ?? []).map(r => ({
+      id: r.id,
+      label: r.label,
+      subject: r.subject,
+      duration: r.duration,
+      mode: r.mode as 'focus' | 'break',
+      mood: r.mood ?? null,
+      notes: r.notes ?? '',
+      created_at: r.created_at,
+    }));
+  },
+
+  async add(log: Omit<StudyLogRow, 'created_at'>): Promise<void> {
+    const userId = await getUserId();
+    const { error } = await supabase.from('study_logs').insert({
+      id: log.id,
+      user_id: userId,
+      label: log.label,
+      subject: log.subject,
+      duration: log.duration,
+      mode: log.mode,
+      mood: log.mood ?? null,
+      notes: log.notes ?? '',
+    });
+    if (error) throw new Error(`Failed to save study log: ${error.message}`);
+  },
+
+  async deleteAll(): Promise<void> {
+    const userId = await getUserId();
+    const { error } = await supabase
+      .from('study_logs')
+      .delete()
+      .eq('user_id', userId);
+    if (error) throw new Error(`Failed to clear study logs: ${error.message}`);
+  },
+
+  async delete(id: string): Promise<void> {
+    const userId = await getUserId();
+    const { error } = await supabase
+      .from('study_logs')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+    if (error) throw new Error(`Failed to delete study log: ${error.message}`);
+  },
+};
+
 // ─── Calendar Events ─────────────────────────────────────────────
 export const calendarService = {
   async getAll(): Promise<CalendarEvent[]> {
