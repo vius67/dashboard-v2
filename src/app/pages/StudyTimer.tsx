@@ -1,10 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useSpring, useTransform } from 'motion/react';
-import { Play, Pause, Square, RotateCcw, Coffee, Brain, ChevronDown, Sparkles } from 'lucide-react';
+import { Play, Pause, Square, RotateCcw, Coffee, Brain, ChevronDown, Sparkles, BookOpen, Trash2 } from 'lucide-react';
 import { useTimer } from '../context/TimerContext';
 import { useApp } from '../context/AppContext';
-import { homeworkService } from '../../lib/db';
+import { homeworkService, studyLogService, StudyLogRow } from '../../lib/db';
 import { Homework } from '../types';
+
+type Mood = 'great' | 'good' | 'okay' | 'bad';
+
+const MOOD_EMOJI: Record<Mood, string> = { great: '🔥', good: '😊', okay: '😐', bad: '😩' };
+
+function extractSubject(label: string): string {a
+  const parts = label.split(/\s*[—–-]\s*/);
+  return parts[0].trim() || label;
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+}
 
 function fmt(s: number) {
   const h = Math.floor(s / 3600);
@@ -100,10 +119,20 @@ export default function StudyTimer() {
   const [burstTrigger, setBurstTrigger] = useState(0);
   const [justFinished, setJustFinished] = useState(false);
   const prevRunning = useRef(false);
+  const [studyLogs, setStudyLogs] = useState<StudyLogRow[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logsView, setLogsView] = useState<'history' | 'subjects'>('history');
+  // mood modal state
+  const [pendingSession, setPendingSession] = useState<{ label: string; duration: number } | null>(null);
+  const [selectedMood, setSelectedMood] = useState<Mood | null>(null);
+  const [moodNotes, setMoodNotes] = useState('');
 
   useEffect(() => {
     homeworkService.getAll()
       .then(hws => setHomework(hws.filter(h => h.status !== 'done')))
+      .catch(() => {});
+    studyLogService.getAll()
+      .then(setStudyLogs)
       .catch(() => {});
   }, []);
 
@@ -126,10 +155,31 @@ export default function StudyTimer() {
   };
 
   const handleStop = () => {
-    if (timer.elapsed > 10) {
+    if (timer.elapsed > 10 && timer.mode === 'focus') {
       setSessions(prev => [{ label: timer.label, duration: timer.elapsed, mode: timer.mode }, ...prev].slice(0, 10));
+      setPendingSession({ label: timer.label, duration: timer.elapsed });
+      setSelectedMood(null);
+      setMoodNotes('');
     }
     stop();
+  };
+
+  const handleSaveLog = async () => {
+    if (!pendingSession) return;
+    const newLog: Omit<StudyLogRow, 'created_at'> = {
+      id: Date.now().toString(),
+      label: pendingSession.label,
+      subject: extractSubject(pendingSession.label),
+      duration: pendingSession.duration,
+      mode: 'focus',
+      mood: selectedMood,
+      notes: moodNotes.trim(),
+    };
+    try {
+      await studyLogService.add(newLog);
+      setStudyLogs(prev => [{ ...newLog, created_at: new Date().toISOString() }, ...prev]);
+    } catch (e) { console.error(e); }
+    setPendingSession(null);
   };
 
   const handlePreset = (p: typeof PRESETS[0]) => {
@@ -149,6 +199,86 @@ export default function StudyTimer() {
   const timeChars = timeStr.split('');
 
   return (
+    <>
+    {/* ── Mood modal ── */}
+    <AnimatePresence>
+      {pendingSession && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-6"
+          style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)' }}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.9, opacity: 0, y: 20 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+            className={`w-full max-w-sm rounded-3xl border p-6 space-y-5 ${darkMode ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200'}`}
+          >
+            <div>
+              <p className="text-xs font-mono font-semibold uppercase tracking-widest text-emerald-500 mb-1">session logged</p>
+              <p className={`text-lg font-light ${darkMode ? 'text-white' : 'text-gray-900'}`}>{pendingSession.label}</p>
+              <p className="text-xs font-mono text-gray-400">{fmtShort(pendingSession.duration)} focused</p>
+            </div>
+
+            <div>
+              <p className="text-xs font-mono text-gray-400 mb-2">how did it go?</p>
+              <div className="flex gap-2">
+                {(Object.entries(MOOD_EMOJI) as [Mood, string][]).map(([mood, emoji]) => (
+                  <button
+                    key={mood}
+                    onClick={() => setSelectedMood(mood)}
+                    className={`flex-1 py-2.5 rounded-xl text-lg transition-all border ${
+                      selectedMood === mood
+                        ? 'border-emerald-400/50 bg-emerald-500/15 scale-105'
+                        : darkMode ? 'border-white/10 bg-white/5 hover:bg-white/10' : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+                    }`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-mono text-gray-400 mb-2">notes (optional)</p>
+              <textarea
+                value={moodNotes}
+                onChange={e => setMoodNotes(e.target.value)}
+                placeholder="what did you work on?"
+                rows={2}
+                className={`w-full rounded-xl border px-3 py-2 text-xs font-mono resize-none outline-none transition-colors ${
+                  darkMode
+                    ? 'bg-white/5 border-white/10 text-white placeholder:text-gray-600 focus:border-white/20'
+                    : 'bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-300'
+                }`}
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPendingSession(null)}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-mono border transition-colors ${
+                  darkMode ? 'border-white/10 text-gray-400 hover:bg-white/5' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                }`}
+              >
+                skip
+              </button>
+              <button
+                onClick={handleSaveLog}
+                className="flex-1 py-2.5 rounded-xl text-xs font-mono text-white transition-all"
+                style={{ backgroundColor: '#10b981' }}
+              >
+                save log
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -572,9 +702,155 @@ export default function StudyTimer() {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {/* ── Study Logs ── */}
+            <motion.div
+              initial={{ opacity: 0, x: 30 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.55, type: 'spring', stiffness: 200, damping: 20 }}
+              className={`rounded-3xl border ${glass}`}
+            >
+              {/* Header */}
+              <button
+                onClick={() => setShowLogs(v => !v)}
+                className="w-full flex items-center justify-between p-5"
+              >
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-3.5 h-3.5 text-emerald-500" />
+                  <p className="text-xs font-mono font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">study logs</p>
+                  {studyLogs.length > 0 && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                      {studyLogs.length}
+                    </span>
+                  )}
+                </div>
+                <motion.div animate={{ rotate: showLogs ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                </motion.div>
+              </button>
+
+              <AnimatePresence>
+                {showLogs && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="px-5 pb-5 space-y-4">
+                      {studyLogs.length === 0 ? (
+                        <p className="text-xs font-mono text-gray-400 dark:text-gray-600 text-center py-4">
+                          no logs yet — complete a focus session to start tracking
+                        </p>
+                      ) : (
+                        <>
+                          {/* Tab toggle */}
+                          <div className={`flex rounded-xl p-0.5 ${darkMode ? 'bg-white/5' : 'bg-black/5'}`}>
+                            {(['history', 'subjects'] as const).map(tab => (
+                              <button
+                                key={tab}
+                                onClick={() => setLogsView(tab)}
+                                className={`flex-1 py-1.5 rounded-lg text-xs font-mono transition-all ${
+                                  logsView === tab
+                                    ? darkMode
+                                      ? 'bg-white/10 text-white'
+                                      : 'bg-white text-gray-900 shadow-sm'
+                                    : 'text-gray-400 dark:text-gray-600'
+                                }`}
+                              >
+                                {tab}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* History view */}
+                          {logsView === 'history' && (
+                            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                              {studyLogs.map((log, i) => (
+                                <motion.div
+                                  key={log.id}
+                                  initial={{ opacity: 0, x: 10 }}
+                                  animate={{ opacity: 1, x: 0 }}
+                                  transition={{ delay: i * 0.03 }}
+                                  className={`flex items-center gap-3 p-2.5 rounded-xl ${darkMode ? 'bg-white/5' : 'bg-black/3'}`}
+                                >
+                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-mono text-gray-900 dark:text-white truncate">{log.label}</p>
+                                    <p className="text-[10px] font-mono text-gray-400 dark:text-gray-600">
+                                      {formatDate(log.created_at)}{log.notes ? ` · ${log.notes.slice(0, 40)}${log.notes.length > 40 ? '…' : ''}` : ''}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    {log.mood && <span className="text-sm">{MOOD_EMOJI[log.mood]}</span>}
+                                    <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">{fmtShort(log.duration)}</span>
+                                  </div>
+                                </motion.div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Subjects view */}
+                          {logsView === 'subjects' && (() => {
+                            const bySubject = studyLogs.reduce<Record<string, number>>((acc, log) => {
+                              acc[log.subject] = (acc[log.subject] ?? 0) + log.duration;
+                              return acc;
+                            }, {});
+                            const sorted = Object.entries(bySubject).sort((a, b) => b[1] - a[1]);
+                            const total = sorted.reduce((s, [, v]) => s + v, 0);
+                            return (
+                              <div className="space-y-3">
+                                <div className={`flex justify-between text-[10px] font-mono pb-2 border-b ${darkMode ? 'border-white/10 text-gray-500' : 'border-black/10 text-gray-400'}`}>
+                                  <span>total focus time</span>
+                                  <span className="text-emerald-600 dark:text-emerald-400">{fmtShort(total)}</span>
+                                </div>
+                                {sorted.map(([subject, secs], i) => {
+                                  const pct = Math.round((secs / total) * 100);
+                                  return (
+                                    <motion.div
+                                      key={subject}
+                                      initial={{ opacity: 0, x: 10 }}
+                                      animate={{ opacity: 1, x: 0 }}
+                                      transition={{ delay: i * 0.04 }}
+                                      className="space-y-1"
+                                    >
+                                      <div className="flex justify-between items-baseline">
+                                        <span className="text-xs font-mono text-gray-900 dark:text-white truncate max-w-[60%]">{subject}</span>
+                                        <span className="text-xs font-mono text-gray-400 dark:text-gray-500">{fmtShort(secs)}</span>
+                                      </div>
+                                      <div className={`h-1 rounded-full overflow-hidden ${darkMode ? 'bg-white/10' : 'bg-black/10'}`}>
+                                        <motion.div
+                                          initial={{ width: 0 }}
+                                          animate={{ width: `${pct}%` }}
+                                          transition={{ delay: i * 0.04 + 0.1, duration: 0.5, ease: 'easeOut' }}
+                                          className="h-full rounded-full bg-emerald-500"
+                                        />
+                                      </div>
+                                    </motion.div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+
+                          <button
+                            onClick={async () => { await studyLogService.deleteAll().catch(() => {}); setStudyLogs([]); }}
+                            className="flex items-center gap-1.5 text-[10px] font-mono text-gray-400 hover:text-red-400 transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" /> clear all logs
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
           </div>
         </div>
       </div>
     </motion.div>
+    </>
   );
 }
