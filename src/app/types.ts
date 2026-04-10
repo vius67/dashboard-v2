@@ -35,6 +35,10 @@ export interface TodoItem {
   text: string;
   completed: boolean;
   createdAt: string;
+  project?: string;
+  priority?: 1 | 2 | 3 | 4;
+  dueDate?: string;
+  notes?: string;
 }
 
 export interface CalendarEvent {
