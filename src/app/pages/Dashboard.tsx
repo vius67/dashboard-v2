@@ -709,7 +709,7 @@ function SentralSyncModal({ dark, onClose, onDone }: {
   onDone: () => void;
 }) {
   type Mode = 'choose' | 'auto-creds' | 'auto-syncing' | 'ics-A' | 'ics-A-saving' | 'ics-B' | 'ics-B-saving' | 'done';
-  const [mode, setMode] = React.useState<Mode>('choose');
+  const [mode, setMode] = React.useState<Mode>('ics-A');
   const [schoolUrl, setSchoolUrl] = React.useState('');
   const [username, setUsername] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -752,7 +752,7 @@ function SentralSyncModal({ dark, onClose, onDone }: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ schoolUrl: normaliseUrl(schoolUrl), username, password }),
       });
-      if (res.status === 404) {
+      if (res.status === 404 || res.status === 405) {
         // API route not deployed — fall back to guided ICS
         setErr('');
         setMode('ics-A');
@@ -844,12 +844,12 @@ function SentralSyncModal({ dark, onClose, onDone }: {
               <p className={`text-xs font-mono ${subtle} mb-2`}>How do you want to sync?</p>
               <button onClick={() => setMode('auto-creds')}
                 className={`w-full flex items-start gap-3 p-4 rounded-2xl border text-left transition-all ${
-                  dark ? 'border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5' : 'border-gray-200 hover:border-emerald-400 hover:bg-emerald-50/40'
+                  dark ? 'border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5 opacity-50' : 'border-gray-200 hover:border-emerald-400 hover:bg-emerald-50/40 opacity-50'
                 }`}>
                 <span className="text-lg mt-0.5">⚡</span>
                 <div>
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Auto sync</p>
-                  <p className={`text-xs font-mono mt-0.5 ${subtle}`}>Enter your DoE credentials — app fetches timetable automatically (requires backend deployed)</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Auto sync <span className="text-[10px] font-mono text-gray-400">(not available)</span></p>
+                  <p className={`text-xs font-mono mt-0.5 ${subtle}`}>Requires a backend to be deployed — not set up yet</p>
                 </div>
               </button>
               <button onClick={() => setMode('ics-A')}
@@ -858,8 +858,8 @@ function SentralSyncModal({ dark, onClose, onDone }: {
                 }`}>
                 <span className="text-lg mt-0.5">📥</span>
                 <div>
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Guided ICS import</p>
-                  <p className={`text-xs font-mono mt-0.5 ${subtle}`}>Opens Sentral export page for you — drop the file here</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Import ICS files</p>
+                  <p className={`text-xs font-mono mt-0.5 ${subtle}`}>Export from Sentral → drop the .ics files here</p>
                 </div>
               </button>
             </motion.div>
