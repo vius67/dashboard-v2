@@ -147,7 +147,7 @@ function getWeekendCountdown(): { daysUntilMon: number; nextMonday: Date } {
   return { daysUntilMon, nextMonday };
 }
 
-type Modal = 'none' | 'add' | 'edit' | 'ics';
+type Modal = 'none' | 'add' | 'edit' | 'sentral';
 
 export default function Dashboard() {
   const { darkMode } = useApp();
@@ -186,7 +186,7 @@ export default function Dashboard() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    const onImport = () => setModal('ics');
+    const onImport = () => setModal('sentral');
     const onNew = () => { setEditTarget(null); setModal('add'); };
     window.addEventListener('dashboard:open-import', onImport);
     window.addEventListener('dashboard:new-item', onNew);
@@ -267,11 +267,11 @@ export default function Dashboard() {
         {/* ── HERO ── */}
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="flex items-end justify-between gap-4 flex-wrap pt-2">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-emerald-500 mb-1">
               {h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening'}
             </p>
-            <h1 className="text-4xl md:text-5xl font-light text-gray-900 dark:text-white tracking-tight">{greeting}</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1.5">{dateStr}</p>
+            <h1 className="text-3xl md:text-4xl font-light text-gray-900 dark:text-white tracking-tight">{greeting}</h1>
+            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">{dateStr}</p>
           </div>
           <div className="flex gap-2 flex-wrap items-center">
             <span className={`px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border ${
@@ -279,9 +279,9 @@ export default function Dashboard() {
                 ? darkMode ? 'bg-blue-500/15 border-blue-400/20 text-blue-300' : 'bg-blue-50 border-blue-200 text-blue-700'
                 : darkMode ? 'bg-purple-500/15 border-purple-400/20 text-purple-300' : 'bg-purple-50 border-purple-200 text-purple-700'
             }`}>Week {weekType}</span>
-            <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => setModal('ics')}
+            <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => setModal('sentral')}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium border transition-colors ${darkMode ? 'bg-white/10 border-white/15 text-gray-200 hover:bg-white/20' : 'bg-white/50 border-white/60 text-gray-700 hover:bg-white/80'}`}>
-              <Upload className="w-3.5 h-3.5" /> Import .ics
+              <Upload className="w-3.5 h-3.5" /> Sync Sentral
             </motion.button>
             <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => { setEditTarget(null); setModal('add'); }}
               className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white transition-colors">
@@ -310,7 +310,7 @@ export default function Dashboard() {
                 <p className="font-semibold text-gray-900 dark:text-white">{currentClass.subject}</p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">{[currentClass.room, currentClass.teacher].filter(Boolean).join(' · ')} · ends {currentClass.endTime}</p>
               </div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-red-500 dark:text-red-400">In class</span>
+              <span className="text-xs font-medium uppercase tracking-wider text-red-500 dark:text-red-400 bg-red-500/10 px-2.5 py-1 rounded-full">now</span>
             </motion.div>
           )}
         </AnimatePresence>
@@ -327,7 +327,7 @@ export default function Dashboard() {
 
             ) : isWeekend ? (
               <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-4">
+                <p className="text-xs font-medium uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500 mb-4">
                   School resumes in
                 </p>
                 <div className="flex items-start justify-center gap-1.5 mb-6">
@@ -341,7 +341,7 @@ export default function Dashboard() {
                   <Colon dark={darkMode} />
                   <DigitBlock value={pad2(weekendCountdown.seconds)} label="sec" dark={darkMode} />
                 </div>
-                <p className="text-xl font-light text-gray-900 dark:text-white mb-2">
+                <p className="text-2xl font-light text-gray-900 dark:text-white mb-2">
                   {dayOfWeek === 6 ? "time to start the weekend!" : "It's Sunday haha, your almost there!"}
                 </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -352,23 +352,23 @@ export default function Dashboard() {
             ) : timetable.length === 0 ? (
               <div className="py-6">
                 <Calendar className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-700" />
-                <p className="text-lg font-light text-gray-900 dark:text-white mb-2">No timetable yet</p>
+                <p className="text-xl font-light text-gray-900 dark:text-white mb-2">No timetable yet</p>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Import your .ics file or add classes manually</p>
                 <div className="flex gap-3 justify-center flex-wrap">
-                  <button onClick={() => setModal('ics')} className={`px-5 py-2.5 rounded-full text-sm font-medium border transition-colors ${darkMode ? 'bg-white/10 border-white/15 text-gray-200 hover:bg-white/20' : 'bg-white/60 border-white/60 text-gray-700 hover:bg-white/90'}`}>Import .ics</button>
+                  <button onClick={() => setModal('sentral')} className={`px-5 py-2.5 rounded-full text-sm font-medium border transition-colors ${darkMode ? 'bg-white/10 border-white/15 text-gray-200 hover:bg-white/20' : 'bg-white/60 border-white/60 text-gray-700 hover:bg-white/90'}`}>Sync Sentral</button>
                   <button onClick={() => { setEditTarget(null); setModal('add'); }} className="px-5 py-2.5 rounded-full text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white transition-colors">Add class</button>
                 </div>
               </div>
             ) : !nextClass ? (
               <div className="py-6">
                 <p className="text-5xl mb-4">🎉</p>
-                <p className="text-xl font-light text-gray-900 dark:text-white mb-2">No more classes today</p>
+                <p className="text-2xl font-light text-gray-900 dark:text-white mb-2">No more classes today</p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Enjoy your free time</p>
               </div>
             ) : (
               <>
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-7">
-                  {currentClass ? 'Next up after current class' : 'Next class in'}
+                <p className="text-xs font-medium uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500 mb-7">
+                  {currentClass ? 'Next up' : 'Next class in'}
                 </p>
                 <div className="flex items-start justify-center gap-1.5 mb-8">
                   <DigitBlock value={pad2(countdown.hours)}   label="hrs" dark={darkMode} />
@@ -377,7 +377,7 @@ export default function Dashboard() {
                   <Colon dark={darkMode} />
                   <DigitBlock value={pad2(countdown.seconds)} label="sec" dark={darkMode} />
                 </div>
-                <p className="text-2xl font-light text-gray-900 dark:text-white mb-4 tracking-tight">{nextClass.subject}</p>
+                <p className="text-2xl md:text-3xl font-light text-gray-900 dark:text-white mb-5 tracking-tight">{nextClass.subject}</p>
                 <div className="flex items-center justify-center gap-2 flex-wrap">
                   {[
                     { icon: Clock,    text: `${nextClass.startTime}–${nextClass.endTime}` },
@@ -413,16 +413,16 @@ export default function Dashboard() {
                         ? darkMode ? 'bg-emerald-500/20 border-emerald-400/25 text-emerald-300' : 'bg-emerald-500/12 border-emerald-300/40 text-emerald-700'
                         : darkMode ? 'bg-white/5 border-white/8 text-gray-400 hover:bg-white/10' : 'bg-white/40 border-white/50 text-gray-500 hover:bg-white/70'
                     }`}>
-                    <span className="text-[10px] font-semibold uppercase tracking-wider">{DAYS_SHORT[d]}</span>
+                    <span className="text-[10px] font-medium uppercase tracking-wider">{DAYS_SHORT[d]}</span>
                     <span className={`text-lg font-light ${isActive ? '' : 'text-gray-900 dark:text-white'}`}>{count}</span>
                     {count > 0 && <span className={`w-1 h-1 rounded-full ${isActive ? 'bg-current' : 'bg-emerald-400'}`} />}
-                    {isToday && !isActive && <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-500">Today</span>}
+                    {isToday && !isActive && <span className="text-[9px] font-semibold uppercase tracking-wider text-emerald-500">Today</span>}
                   </button>
                 );
               })}
             </div>
 
-            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-3 px-1">
+            <p className="text-xs font-medium uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500 mb-3 px-1">
               {viewDay === now.getDay() ? "Today's schedule" : `${DAYS[viewDay]}'s schedule`}
             </p>
 
@@ -458,8 +458,8 @@ export default function Dashboard() {
                         <p className="font-semibold text-gray-900 dark:text-white truncate">{cls.subject}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">{[cls.teacher, cls.room].filter(Boolean).join(' · ')}</p>
                       </div>
-                      {isNow  && <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex-shrink-0">Now</span>}
-                      {isNext && <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500 flex-shrink-0">Next</span>}
+                      {isNow  && <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex-shrink-0">now</span>}
+                      {isNext && <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded-full flex-shrink-0">next</span>}
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                         <button onClick={() => { setEditTarget(cls); setModal('edit'); }}
                           className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors">
@@ -487,7 +487,7 @@ export default function Dashboard() {
             >
               <div className="flex items-center gap-3">
                 <Calendar className="w-4 h-4 text-emerald-500" />
-                <span className="font-semibold text-sm text-gray-900 dark:text-white">Full Timetable</span>
+                <span className="font-medium text-sm text-gray-900 dark:text-white">Full Timetable</span>
                 <div className="flex gap-1">
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                     timetableTab === 'A'
@@ -528,7 +528,7 @@ export default function Dashboard() {
                       ))}
                       {weekBTimetable.length === 0 && timetableTab === 'B' && (
                         <span className="text-xs text-gray-400 dark:text-gray-600 self-center ml-2">
-                          Import .ics to populate Week B
+                          Sync Sentral to populate Week B
                         </span>
                       )}
                     </div>
@@ -583,8 +583,8 @@ export default function Dashboard() {
           <ClassModal dark={darkMode} existing={editTarget} onClose={() => setModal('none')}
             onSave={async cls => { await timetableService.upsert(cls); await load(); setModal('none'); setViewDay(cls.dayOfWeek); }} />
         )}
-        {modal === 'ics' && (
-          <IcsModal dark={darkMode} onClose={() => setModal('none')}
+        {modal === 'sentral' && (
+          <SentralSyncModal dark={darkMode} onClose={() => setModal('none')}
             onDone={async () => {
               await load();
               setModal('none');
@@ -698,25 +698,39 @@ function ClassModal({ dark, existing, onClose, onSave }: {
   );
 }
 
-// ── ICS MODAL — step-by-step: Week A then Week B ─────────────────────
-function IcsModal({ dark, onClose, onDone }: {
+// ── SENTRAL SYNC MODAL ───────────────────────────────────────────────
+// Two modes:
+//   AUTO  — calls /api/sentral-sync (Vercel serverless fn with Playwright)
+//           if it returns 404/network error → falls back to guided ICS
+//   ICS   — guided flow: opens Sentral export page in new tab, user drops file
+function SentralSyncModal({ dark, onClose, onDone }: {
   dark: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
-  // step: 'A' = waiting for Week A file
-  //       'A-saving' = saving Week A to Supabase
-  //       'B' = Week A saved, waiting for Week B file
-  //       'B-saving' = saving Week B to Supabase
-  //       'done' = both saved
-  type Step = 'A' | 'A-saving' | 'B' | 'B-saving' | 'done';
-  const [step, setStep] = React.useState<Step>('A');
+  type Mode = 'choose' | 'auto-creds' | 'auto-syncing' | 'ics-A' | 'ics-A-saving' | 'ics-B' | 'ics-B-saving' | 'done';
+  const [mode, setMode] = React.useState<Mode>('choose');
+  const [schoolUrl, setSchoolUrl] = React.useState('');
+  const [username, setUsername] = React.useState('');
+  const [password, setPassword] = React.useState('');
   const [weekACount, setWeekACount] = React.useState(0);
   const [weekBCount, setWeekBCount] = React.useState(0);
   const [err, setErr] = React.useState('');
+  const [showPass, setShowPass] = React.useState(false);
 
-  const bg = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
+  const bg     = dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-200';
   const subtle = dark ? 'text-gray-500' : 'text-gray-400';
+  const inp    = dark
+    ? 'bg-white/5 border-white/10 text-white placeholder-gray-600 focus:border-emerald-500/50'
+    : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-emerald-400';
+  const busy = mode === 'auto-syncing' || mode === 'ics-A-saving' || mode === 'ics-B-saving';
+
+  // ── helpers ──
+  const normaliseUrl = (raw: string) => {
+    let u = raw.trim().toLowerCase();
+    if (!u.startsWith('http')) u = 'https://' + u;
+    return u.replace(/\/$/, '');
+  };
 
   const readFile = (file: File): Promise<string> =>
     new Promise((res, rej) => {
@@ -726,152 +740,280 @@ function IcsModal({ dark, onClose, onDone }: {
       r.readAsText(file);
     });
 
-  const handleWeekA = async (file: File) => {
+  // ── AUTO sync via /api/sentral-sync ──
+  const handleAutoSync = async () => {
     setErr('');
-    setStep('A-saving');
+    if (!schoolUrl.trim()) { setErr('Enter your school Sentral URL'); return; }
+    if (!username.trim() || !password.trim()) { setErr('Enter your DoE username and password'); return; }
+    setMode('auto-syncing');
+    try {
+      const res = await fetch('/api/sentral-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schoolUrl: normaliseUrl(schoolUrl), username, password }),
+      });
+      if (res.status === 404) {
+        // API route not deployed — fall back to guided ICS
+        setErr('');
+        setMode('ics-A');
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Server error ${res.status}`);
+      }
+      const { weekA, weekB } = await res.json() as { weekA: ClassPeriod[]; weekB: ClassPeriod[] };
+      await import('../../lib/db').then(m => m.timetableService.replaceBothWeeks(weekA, weekB));
+      setWeekACount(weekA.length);
+      setWeekBCount(weekB.length);
+      setMode('done');
+    } catch (e: any) {
+      // Network error (no backend deployed) → fall back gracefully
+      if (e.message?.includes('Failed to fetch') || e.message?.includes('NetworkError')) {
+        setErr('');
+        setMode('ics-A');
+      } else {
+        setErr(e.message);
+        setMode('auto-creds');
+      }
+    }
+  };
+
+  // ── ICS fallback handlers ──
+  const handleIcsA = async (file: File) => {
+    setErr('');
+    setMode('ics-A-saving');
     try {
       const text = await readFile(file);
-      if (!text.includes('BEGIN:VCALENDAR')) throw new Error('Not a valid ICS file — make sure you exported from Sentral');
+      if (!text.includes('BEGIN:VCALENDAR')) throw new Error('Not a valid ICS file — export from Sentral → Timetable → Export');
       const parsed = parseIcsToClasses(text);
-      if (!parsed.length) throw new Error('No weekday classes found in this file');
-
-      // Save Week A immediately to Supabase
-      const userId = await import('../../lib/db').then(m => m.timetableService.getAll()).then(() => null).catch(() => null);
+      if (!parsed.length) throw new Error('No weekday classes found');
       await import('../../lib/db').then(m => m.timetableService.replaceWeek(parsed, 'A'));
-
       setWeekACount(parsed.length);
-      setStep('B');
-    } catch (e: any) {
-      setErr(e.message);
-      setStep('A');
-    }
+      setMode('ics-B');
+    } catch (e: any) { setErr(e.message); setMode('ics-A'); }
   };
 
-  const handleWeekB = async (file: File) => {
+  const handleIcsB = async (file: File) => {
     setErr('');
-    setStep('B-saving');
+    setMode('ics-B-saving');
     try {
       const text = await readFile(file);
-      if (!text.includes('BEGIN:VCALENDAR')) throw new Error('Not a valid ICS file — make sure you exported from Sentral');
+      if (!text.includes('BEGIN:VCALENDAR')) throw new Error('Not a valid ICS file');
       const parsed = parseIcsToClasses(text);
-      if (!parsed.length) throw new Error('No weekday classes found in this file');
-
-      // Save Week B immediately to Supabase
+      if (!parsed.length) throw new Error('No weekday classes found');
       await import('../../lib/db').then(m => m.timetableService.replaceWeek(parsed, 'B'));
-
       setWeekBCount(parsed.length);
-      setStep('done');
-    } catch (e: any) {
-      setErr(e.message);
-      setStep('B');
-    }
+      setMode('done');
+    } catch (e: any) { setErr(e.message); setMode('ics-B'); }
   };
 
-  const isSaving = step === 'A-saving' || step === 'B-saving';
+  const openSentralExport = () => {
+    const base = normaliseUrl(schoolUrl || 'yourschool.sentral.com.au');
+    window.open(`${base}/portal2/#!/timetable`, '_blank');
+  };
 
+  // ── Render ──
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
-      onClick={e => e.target === e.currentTarget && !isSaving && onClose()}>
+      onClick={e => e.target === e.currentTarget && !busy && onClose()}>
       <motion.div initial={{ scale: 0.96, opacity: 0, y: 12 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 12 }}
         transition={{ type: 'spring', stiffness: 320, damping: 28 }}
         className={`w-full max-w-sm rounded-3xl border p-6 shadow-2xl ${bg}`}>
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-base font-semibold font-mono text-gray-900 dark:text-white">import timetable</h2>
-          {!isSaving && step !== 'done' && (
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold font-mono text-gray-900 dark:text-white">sync timetable</h2>
+            <p className={`text-[10px] font-mono mt-0.5 ${subtle}`}>via Sentral</p>
+          </div>
+          {!busy && mode !== 'done' && (
             <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 text-gray-400 transition-colors">
               <X className="w-4 h-4" />
             </button>
           )}
         </div>
 
-        {/* Step indicators */}
-        <div className="flex items-center gap-2 mb-5 mt-3">
-          {(['A', 'B'] as const).map((w, i) => {
-            const done = w === 'A' ? (step === 'B' || step === 'B-saving' || step === 'done') : step === 'done';
-            const active = w === 'A' ? (step === 'A' || step === 'A-saving') : (step === 'B' || step === 'B-saving');
-            return (
-              <React.Fragment key={w}>
-                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold border transition-all ${
-                  done ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-600 dark:text-emerald-400'
-                  : active ? w === 'A' ? 'bg-blue-500/15 border-blue-400/30 text-blue-600 dark:text-blue-400'
-                                       : 'bg-purple-500/15 border-purple-400/30 text-purple-600 dark:text-purple-400'
-                  : dark ? 'bg-white/5 border-white/10 text-gray-600' : 'bg-gray-50 border-gray-200 text-gray-400'
-                }`}>
-                  {done ? '✓' : `${i + 1}`} Week {w}
-                </div>
-                {i === 0 && <div className={`flex-1 h-px ${dark ? 'bg-white/10' : 'bg-gray-200'}`} />}
-              </React.Fragment>
-            );
-          })}
-        </div>
-
-        {/* Content per step */}
         <AnimatePresence mode="wait">
-          {(step === 'A' || step === 'A-saving') && (
-            <motion.div key="stepA" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
-              <p className={`text-xs font-mono mb-4 ${subtle}`}>
-                Export <strong className="text-gray-700 dark:text-gray-300">Week A</strong> from Sentral as an .ics file, then upload it here.
+
+          {/* ── CHOOSE mode ── */}
+          {mode === 'choose' && (
+            <motion.div key="choose" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+              className="space-y-3">
+              <p className={`text-xs font-mono ${subtle} mb-2`}>How do you want to sync?</p>
+              <button onClick={() => setMode('auto-creds')}
+                className={`w-full flex items-start gap-3 p-4 rounded-2xl border text-left transition-all ${
+                  dark ? 'border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5' : 'border-gray-200 hover:border-emerald-400 hover:bg-emerald-50/40'
+                }`}>
+                <span className="text-lg mt-0.5">⚡</span>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Auto sync</p>
+                  <p className={`text-xs font-mono mt-0.5 ${subtle}`}>Enter your DoE credentials — app fetches timetable automatically (requires backend deployed)</p>
+                </div>
+              </button>
+              <button onClick={() => setMode('ics-A')}
+                className={`w-full flex items-start gap-3 p-4 rounded-2xl border text-left transition-all ${
+                  dark ? 'border-white/10 hover:border-blue-500/40 hover:bg-blue-500/5' : 'border-gray-200 hover:border-blue-400 hover:bg-blue-50/40'
+                }`}>
+                <span className="text-lg mt-0.5">📥</span>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Guided ICS import</p>
+                  <p className={`text-xs font-mono mt-0.5 ${subtle}`}>Opens Sentral export page for you — drop the file here</p>
+                </div>
+              </button>
+            </motion.div>
+          )}
+
+          {/* ── AUTO CREDS ── */}
+          {mode === 'auto-creds' && (
+            <motion.div key="creds" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
+              className="space-y-3">
+              <p className={`text-xs font-mono ${subtle} mb-1`}>
+                Enter your school's Sentral URL and DoE credentials.{' '}
+                <span className="text-yellow-500 dark:text-yellow-400">Your password is sent only to the sync API and never stored.</span>
               </p>
-              <label className={`relative block w-full rounded-2xl border-2 border-dashed p-8 text-center cursor-pointer transition-all ${
-                step === 'A-saving' ? 'border-blue-400/50 bg-blue-500/5 cursor-not-allowed'
+              <div>
+                <label className={`block text-[10px] font-semibold uppercase tracking-wider mb-1 ${subtle}`}>School Sentral URL</label>
+                <input value={schoolUrl} onChange={e => setSchoolUrl(e.target.value)}
+                  placeholder="yourschool.sentral.com.au"
+                  className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`} />
+              </div>
+              <div>
+                <label className={`block text-[10px] font-semibold uppercase tracking-wider mb-1 ${subtle}`}>DoE Username</label>
+                <input value={username} onChange={e => setUsername(e.target.value)}
+                  placeholder="firstname.lastname1"
+                  autoComplete="username"
+                  className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`} />
+              </div>
+              <div>
+                <label className={`block text-[10px] font-semibold uppercase tracking-wider mb-1 ${subtle}`}>Password</label>
+                <div className="relative">
+                  <input value={password} onChange={e => setPassword(e.target.value)}
+                    type={showPass ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    autoComplete="current-password"
+                    className={`w-full px-4 py-2.5 pr-10 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors ${inp}`} />
+                  <button type="button" onClick={() => setShowPass(p => !p)}
+                    className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs ${subtle}`}>
+                    {showPass ? 'hide' : 'show'}
+                  </button>
+                </div>
+              </div>
+              <motion.button onClick={handleAutoSync} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
+                className="w-full py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-sm font-mono font-medium text-white transition-colors mt-1">
+                sync now
+              </motion.button>
+              <button onClick={() => setMode('choose')}
+                className={`w-full py-1.5 text-xs font-mono transition-colors ${subtle} hover:text-gray-300`}>
+                ← back
+              </button>
+            </motion.div>
+          )}
+
+          {/* ── AUTO SYNCING ── */}
+          {mode === 'auto-syncing' && (
+            <motion.div key="syncing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-8 flex flex-col items-center gap-3">
+              <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
+              <p className={`text-xs font-mono ${subtle}`}>logging into Sentral…</p>
+              <p className={`text-[10px] font-mono ${dark ? 'text-gray-700' : 'text-gray-300'}`}>this takes ~10 seconds</p>
+            </motion.div>
+          )}
+
+          {/* ── ICS WEEK A ── */}
+          {(mode === 'ics-A' || mode === 'ics-A-saving') && (
+            <motion.div key="icsA" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
+              {/* Week indicators */}
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold border bg-blue-500/15 border-blue-400/30 text-blue-600 dark:text-blue-400">
+                  1 Week A
+                </div>
+                <div className={`flex-1 h-px ${dark ? 'bg-white/10' : 'bg-gray-200'}`} />
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold border ${dark ? 'bg-white/5 border-white/10 text-gray-600' : 'bg-gray-50 border-gray-200 text-gray-400'}`}>
+                  2 Week B
+                </div>
+              </div>
+              <p className={`text-xs font-mono mb-3 ${subtle}`}>
+                On Sentral: <strong className="text-gray-700 dark:text-gray-300">Timetable → Export → Week A → Download ICS</strong>
+              </p>
+              {schoolUrl && (
+                <button onClick={openSentralExport}
+                  className="w-full mb-3 py-2 px-3 rounded-xl text-xs font-mono font-medium border border-blue-400/30 text-blue-500 dark:text-blue-400 hover:bg-blue-500/10 transition-colors flex items-center justify-center gap-1.5">
+                  ↗ open Sentral timetable page
+                </button>
+              )}
+              <label className={`relative block w-full rounded-2xl border-2 border-dashed p-7 text-center cursor-pointer transition-all ${
+                mode === 'ics-A-saving' ? 'border-blue-400/50 bg-blue-500/5 cursor-not-allowed'
                 : dark ? 'border-white/15 hover:border-blue-400/40 hover:bg-blue-500/5' : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/40'
               }`}>
-                <input type="file" accept=".ics" className="sr-only" disabled={step === 'A-saving'}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) handleWeekA(f); }} />
-                {step === 'A-saving' ? (
+                <input type="file" accept=".ics" className="sr-only" disabled={mode === 'ics-A-saving'}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleIcsA(f); }} />
+                {mode === 'ics-A-saving' ? (
                   <div className="flex flex-col items-center gap-2">
                     <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
                     <span className="text-xs font-mono text-blue-500">saving week A…</span>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2">
-                    <Upload className={`w-7 h-7 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
-                    <span className="text-xs font-mono text-blue-500 dark:text-blue-400 font-medium">click to upload Week A .ics</span>
-                    <span className={`text-[10px] font-mono ${subtle}`}>or drag and drop</span>
+                    <Upload className={`w-6 h-6 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
+                    <span className="text-xs font-mono text-blue-500 dark:text-blue-400 font-medium">drop Week A .ics here</span>
                   </div>
                 )}
               </label>
             </motion.div>
           )}
 
-          {(step === 'B' || step === 'B-saving') && (
-            <motion.div key="stepB" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
-              <div className={`flex items-center gap-2 px-3 py-2 rounded-xl mb-4 ${dark ? 'bg-emerald-500/10 border border-emerald-400/20' : 'bg-emerald-50 border border-emerald-200/60'}`}>
+          {/* ── ICS WEEK B ── */}
+          {(mode === 'ics-B' || mode === 'ics-B-saving') && (
+            <motion.div key="icsB" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold border bg-emerald-500/15 border-emerald-400/30 text-emerald-600 dark:text-emerald-400">
+                  ✓ Week A
+                </div>
+                <div className={`flex-1 h-px ${dark ? 'bg-white/10' : 'bg-gray-200'}`} />
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold border bg-purple-500/15 border-purple-400/30 text-purple-600 dark:text-purple-400">
+                  2 Week B
+                </div>
+              </div>
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-xl mb-3 ${dark ? 'bg-emerald-500/10 border border-emerald-400/20' : 'bg-emerald-50 border border-emerald-200/60'}`}>
                 <span className="text-emerald-500 text-sm">✓</span>
                 <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">Week A saved — {weekACount} classes</span>
               </div>
-              <p className={`text-xs font-mono mb-4 ${subtle}`}>
-                Now upload <strong className="text-gray-700 dark:text-gray-300">Week B</strong> from Sentral.
+              <p className={`text-xs font-mono mb-3 ${subtle}`}>
+                Now export <strong className="text-gray-700 dark:text-gray-300">Week B</strong> from Sentral and drop it here.
               </p>
-              <label className={`relative block w-full rounded-2xl border-2 border-dashed p-8 text-center cursor-pointer transition-all ${
-                step === 'B-saving' ? 'border-purple-400/50 bg-purple-500/5 cursor-not-allowed'
+              {schoolUrl && (
+                <button onClick={openSentralExport}
+                  className="w-full mb-3 py-2 px-3 rounded-xl text-xs font-mono font-medium border border-purple-400/30 text-purple-500 dark:text-purple-400 hover:bg-purple-500/10 transition-colors flex items-center justify-center gap-1.5">
+                  ↗ open Sentral timetable page
+                </button>
+              )}
+              <label className={`relative block w-full rounded-2xl border-2 border-dashed p-7 text-center cursor-pointer transition-all ${
+                mode === 'ics-B-saving' ? 'border-purple-400/50 bg-purple-500/5 cursor-not-allowed'
                 : dark ? 'border-white/15 hover:border-purple-400/40 hover:bg-purple-500/5' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50/40'
               }`}>
-                <input type="file" accept=".ics" className="sr-only" disabled={step === 'B-saving'}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) handleWeekB(f); }} />
-                {step === 'B-saving' ? (
+                <input type="file" accept=".ics" className="sr-only" disabled={mode === 'ics-B-saving'}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleIcsB(f); }} />
+                {mode === 'ics-B-saving' ? (
                   <div className="flex flex-col items-center gap-2">
                     <Loader2 className="w-7 h-7 animate-spin text-purple-500" />
                     <span className="text-xs font-mono text-purple-500">saving week B…</span>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2">
-                    <Upload className={`w-7 h-7 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
-                    <span className="text-xs font-mono text-purple-500 dark:text-purple-400 font-medium">click to upload Week B .ics</span>
-                    <span className={`text-[10px] font-mono ${subtle}`}>or drag and drop</span>
+                    <Upload className={`w-6 h-6 ${dark ? 'text-gray-600' : 'text-gray-400'}`} />
+                    <span className="text-xs font-mono text-purple-500 dark:text-purple-400 font-medium">drop Week B .ics here</span>
                   </div>
                 )}
               </label>
             </motion.div>
           )}
 
-          {step === 'done' && (
+          {/* ── DONE ── */}
+          {mode === 'done' && (
             <motion.div key="done" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-4">
               <div className="text-4xl mb-3">🎉</div>
-              <p className="font-semibold text-gray-900 dark:text-white mb-1">Timetable imported!</p>
+              <p className="font-semibold text-gray-900 dark:text-white mb-1">Timetable synced!</p>
               <p className={`text-xs font-mono ${subtle} mb-5`}>
                 Week A: {weekACount} classes · Week B: {weekBCount} classes
               </p>
@@ -881,6 +1023,7 @@ function IcsModal({ dark, onClose, onDone }: {
               </motion.button>
             </motion.div>
           )}
+
         </AnimatePresence>
 
         {/* Error */}
@@ -891,8 +1034,8 @@ function IcsModal({ dark, onClose, onDone }: {
           </motion.p>
         )}
 
-        {/* Cancel button (only when not saving and not done) */}
-        {step !== 'done' && !isSaving && (
+        {/* Cancel (not when busy or done) */}
+        {!busy && mode !== 'done' && mode !== 'choose' && mode !== 'auto-creds' && (
           <button onClick={onClose}
             className={`w-full mt-3 py-2 rounded-2xl text-xs font-mono transition-colors ${dark ? 'text-gray-600 hover:text-gray-400' : 'text-gray-400 hover:text-gray-600'}`}>
             cancel
