@@ -740,44 +740,8 @@ function SentralSyncModal({ dark, onClose, onDone }: {
       r.readAsText(file);
     });
 
-  // ── AUTO sync via /api/sentral-sync ──
-  const handleAutoSync = async () => {
-    setErr('');
-    if (!schoolUrl.trim()) { setErr('Enter your school Sentral URL'); return; }
-    if (!username.trim() || !password.trim()) { setErr('Enter your DoE username and password'); return; }
-    setMode('auto-syncing');
-    try {
-      const res = await fetch('/api/sentral-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schoolUrl: normaliseUrl(schoolUrl), username, password }),
-      });
-      if (res.status === 404 || res.status === 405) {
-        // API route not deployed — fall back to guided ICS
-        setErr('');
-        setMode('ics-A');
-        return;
-      }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Server error ${res.status}`);
-      }
-      const { weekA, weekB } = await res.json() as { weekA: ClassPeriod[]; weekB: ClassPeriod[] };
-      await import('../../lib/db').then(m => m.timetableService.replaceBothWeeks(weekA, weekB));
-      setWeekACount(weekA.length);
-      setWeekBCount(weekB.length);
-      setMode('done');
-    } catch (e: any) {
-      // Network error (no backend deployed) → fall back gracefully
-      if (e.message?.includes('Failed to fetch') || e.message?.includes('NetworkError')) {
-        setErr('');
-        setMode('ics-A');
-      } else {
-        setErr(e.message);
-        setMode('auto-creds');
-      }
-    }
-  };
+  // Auto sync not available — go straight to ICS
+  const handleAutoSync = () => { setMode('ics-A'); };
 
   // ── ICS fallback handlers ──
   const handleIcsA = async (file: File) => {
