@@ -227,6 +227,10 @@ export const todoService = {
       text: r.text,
       completed: r.completed,
       createdAt: r.created_at,
+      project: r.project ?? undefined,
+      priority: r.priority ?? undefined,
+      dueDate: r.due_date ?? undefined,
+      notes: r.notes ?? undefined,
     }));
   },
   async add(t: TodoItem): Promise<void> {
@@ -237,8 +241,28 @@ export const todoService = {
       text: t.text,
       completed: t.completed,
       created_at: t.createdAt,
+      project: t.project ?? null,
+      priority: t.priority ?? null,
+      due_date: t.dueDate ?? null,
+      notes: t.notes ?? null,
     });
     if (error) throw new Error(`Failed to add todo: ${error.message}`);
+  },
+  async update(t: TodoItem): Promise<void> {
+    const userId = await getUserId();
+    const { error } = await supabase
+      .from('todos')
+      .update({
+        text: t.text,
+        completed: t.completed,
+        project: t.project ?? null,
+        priority: t.priority ?? null,
+        due_date: t.dueDate ?? null,
+        notes: t.notes ?? null,
+      })
+      .eq('id', t.id)
+      .eq('user_id', userId);
+    if (error) throw new Error(`Failed to update todo: ${error.message}`);
   },
   async toggle(id: string, completed: boolean): Promise<void> {
     const userId = await getUserId();
