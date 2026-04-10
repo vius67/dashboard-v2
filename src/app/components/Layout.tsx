@@ -92,7 +92,7 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
         className={`fixed top-0 left-0 right-0 z-40 border-b ${glass}`}>
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <motion.div initial={{ opacity:0, x:-20 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.2 }}>
-            <h1 className={`text-xl font-mono font-medium tracking-tight ${darkMode?'text-white':'text-gray-900'}`}>
+            <h1 className={`text-xl font-semibold tracking-tight ${darkMode?'text-white':'text-gray-900'}`}>
               student<span className="text-emerald-500">.</span>
             </h1>
           </motion.div>
@@ -138,7 +138,7 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
                     : darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                     <Icon className="w-5 h-5" />
                   </div>
-                  <span className={`text-[9px] font-mono font-semibold tracking-wide transition-all ${isActive
+                  <span className={`text-[9px] font-semibold tracking-wide transition-all ${isActive
                     ? darkMode ? 'text-emerald-300' : 'text-emerald-600'
                     : darkMode ? 'text-gray-500' : 'text-gray-400'}`}>{item.label.split(' ')[0]}</span>
                 </motion.div>
@@ -160,7 +160,7 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
               <Link key={item.path} to={item.path}>
                 <motion.div initial={{ opacity:0, x:-20 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.3+index*0.07 }}
                   whileHover={{ x:5 }} whileTap={{ scale:0.97 }}
-                  className={`relative flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all font-mono font-medium tracking-wide text-sm ${isActive
+                  className={`relative flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all font-medium text-sm ${isActive
                     ? darkMode ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/25 shadow-lg' : 'bg-emerald-500/15 text-emerald-700 border border-emerald-300/40 shadow-lg shadow-emerald-500/10'
                     : darkMode ? 'text-gray-400 hover:bg-white/5 hover:text-gray-200' : 'text-gray-500 hover:bg-white/40 hover:text-gray-700'}`}>
                   {isActive && (
@@ -179,7 +179,7 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
           })}
         </div>
         {user?.email && (
-          <div className={`text-[10px] font-mono truncate px-4 pb-2 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+          <div className={`text-[10px] truncate px-4 pb-2 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`}>
             {user.email}
           </div>
         )}
