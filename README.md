@@ -1,11 +1,37 @@
+# BEAM Portal
 
-  # Student Productivity Dashboard
+Student productivity app built with Next.js, Supabase, and a liquid glass UI.
 
-  This is a code bundle for Student Productivity Dashboard. The original project is available at https://www.figma.com/design/66otLBDLz5maauLIp3lZdb/Student-Productivity-Dashboard.
+## Features
+- 📊 Dashboard — overview of everything
+- 📚 Homework — track and manage homework
+- ✓ To-do — Todoist-style task manager
+- 📈 Past Papers — log papers with score charts
+- ⏱ Study Timer — Pomodoro-style timer with session log
+- 🗓 Calendar — Google Calendar-style event manager
+- 📝 Notes — Notion-style note editor with autosave
 
-  ## Running the code
+## Setup
 
-  Run `npm i` to install the dependencies.
+1. Clone the repo
+2. Install dependencies:
+   \`\`\`bash
+   npm install
+   \`\`\`
+3. Create a `.env.local` file:
+   \`\`\`
+   NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+   \`\`\`
+4. Run the SQL from `supabase/schema.sql` in your Supabase SQL editor
+5. Run locally:
+   \`\`\`bash
+   npm run dev
+   \`\`\`
 
-  Run `npm run dev` to start the development server.
-  
+## Deploy to Vercel
+
+1. Push to GitHub
+2. Import project in Vercel
+3. Add environment variables in Vercel dashboard
+4. Deploy
